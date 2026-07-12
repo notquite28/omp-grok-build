@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "omp-grok-build-marketplace",
+  "owner": {
+    "name": "omp-grok-build maintainers"
+  },
+  "metadata": {
+    "description": "Grok Build CLI subscription provider for Oh My Pi"
+  },
+  "plugins": [
+    {
+      "name": "omp-grok-build",
+      "version": "0.1.0",
+      "description": "Use Grok Build CLI subscription models through cli-chat-proxy.grok.com in OMP",
+      "category": "development",
+      "tags": ["grok", "xai", "provider", "oauth"],
+      "source": "./"
+    }
+  ]
+}

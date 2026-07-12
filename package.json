@@ -1,0 +1,18 @@
+{
+  "name": "omp-grok-build",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Use a Grok Build CLI subscription from Oh My Pi",
+  "omp": {
+    "extensions": [
+      "./src/main.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": ">=16.4.6"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}
