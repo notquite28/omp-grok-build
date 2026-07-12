@@ -66,6 +66,46 @@ grok-build/grok-4.5
 grok-build/grok-composer-2.5-fast
 ```
 
+## Test in an isolated OMP profile
+
+To avoid mixing this provider with your everyday OMP profile, create a dedicated profile alias. `grk` is a convenient alias name that does not conflict with the official `grok` CLI:
+
+```bash
+omp --profile grok-build --alias grk
+source ~/.zshrc
+```
+
+If your shell cannot be detected automatically, add the equivalent function manually:
+
+```zsh
+grk() {
+  command '/home/quiet/.bun/bin/bun' '/home/quiet/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js' --profile=grok-build "$@"
+}
+```
+
+Install through the marketplace in that clean profile:
+
+```bash
+grk plugin marketplace add notquite28/omp-grok-build
+grk install omp-grok-build@omp-grok-build-marketplace
+grk models refresh
+grk models grok-build
+```
+
+Then import existing Grok CLI credentials into the profile:
+
+```bash
+printf '%s\n' '{"id":"login-1","type":"login","providerId":"grok-build"}' \
+  | grk --mode rpc --model grok-build/grok-4.5 --no-session
+```
+
+Smoke test:
+
+```bash
+grk --model grok-build/grok-4.5 --thinking high --no-session \
+  -p "Reply with exactly grk-ok"
+```
+
 ## Authenticate
 
 If you already ran `grok login`, the extension can import the Grok CLI token from:
@@ -182,18 +222,22 @@ CI runs `bun install --frozen-lockfile` and `bun test` on pushes and pull reques
 
 ## Releases
 
-GitHub releases are tag-driven. To cut a release:
+GitHub releases are created only when a matching `vX.Y.Z` tag is pushed. A commit to `master` runs CI but does **not** create a release by itself.
+
+To cut a release:
 
 1. Update `package.json` and `.claude-plugin/marketplace.json` to the same version.
 2. Commit the version bump.
-3. Push a matching tag:
+3. Push `master`.
+4. Push a matching tag:
 
 ```bash
 git tag v0.1.0
+git push origin master
 git push origin v0.1.0
 ```
 
-The release workflow validates that `vX.Y.Z` matches `package.json`, runs `bun test`, creates a source archive, and publishes a GitHub release with generated notes.
+The release workflow validates that `vX.Y.Z` matches `package.json`, runs `bun test`, creates a source archive, and publishes a GitHub release with generated notes. For the initial `0.1.0` release, pushing `v0.1.0` is enough because the package version is already `0.1.0`.
 
 ## Marketplace
 
