@@ -82,7 +82,7 @@ omp models grok-build                 # list Grok Build models
 omp --model grok-build/grok-4.5 -p "hi" # smoke-test provider
 ```
 
-There are no build, lint, format, typecheck, or CI scripts. Avoid inventing those commands unless you add the corresponding tooling.
+CI exists under `.github/workflows/`: `ci.yml` runs Bun tests on pushes/PRs to `master`; `release.yml` runs tests and creates GitHub releases for `v*.*.*` tags. There are no build, lint, format, or typecheck scripts.
 
 ## Code Conventions & Common Patterns
 
@@ -150,6 +150,7 @@ There are no build, lint, format, typecheck, or CI scripts. Avoid inventing thos
 - **Marketplace**: local catalog exists under `.claude-plugin/marketplace.json`; package is `private: true`, so npm publishing is not configured.
 - **Grok CLI parity**: prefer the official CLI model ids from the proxy/CLI (`grok-4.5`, `grok-composer-2.5-fast`). Refresh model cache with `omp models refresh` when xAI changes entitlements.
 - **Endpoint constraint**: inference, model discovery, and billing stay on `cli-chat-proxy.grok.com`; only OAuth uses `auth.x.ai`.
+- **Releases**: tag-driven GitHub releases. Keep `package.json` and `.claude-plugin/marketplace.json` versions aligned before pushing `vX.Y.Z`.
 
 Optional env used by source:
 

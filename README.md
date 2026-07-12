@@ -178,7 +178,22 @@ bun test test/auth.test.ts
 bun test -t "routes only through the CLI entitlement proxy"
 ```
 
-There is currently no build, lint, format, typecheck, or CI script. The extension ships as TypeScript source loaded by OMP.
+CI runs `bun install --frozen-lockfile` and `bun test` on pushes and pull requests to `master`. There is currently no build, lint, format, or typecheck script. The extension ships as TypeScript source loaded by OMP.
+
+## Releases
+
+GitHub releases are tag-driven. To cut a release:
+
+1. Update `package.json` and `.claude-plugin/marketplace.json` to the same version.
+2. Commit the version bump.
+3. Push a matching tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow validates that `vX.Y.Z` matches `package.json`, runs `bun test`, creates a source archive, and publishes a GitHub release with generated notes.
 
 ## Marketplace
 
