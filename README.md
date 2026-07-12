@@ -92,6 +92,22 @@ grk models refresh
 grk models grok-build
 ```
 
+Update an existing marketplace install after a GitHub release:
+
+```bash
+grk plugin marketplace update
+grk plugin upgrade
+```
+
+If `upgrade` says everything is current, check that the profile has the marketplace and plugin installed:
+
+```bash
+grk plugin marketplace list
+grk plugin list
+```
+
+`grk` is profile-scoped; running plain `omp plugin upgrade` checks your default OMP profile, not this isolated Grok profile.
+
 Then import existing Grok CLI credentials into the profile:
 
 ```bash
@@ -252,6 +268,20 @@ For a published marketplace repo, users would add and install with:
 ```bash
 omp plugin marketplace add owner/repo
 omp install omp-grok-build@omp-grok-build-marketplace
+```
+
+Existing users can upgrade after a new GitHub release by refreshing the marketplace catalog, then upgrading installed marketplace plugins:
+
+```bash
+omp plugin marketplace update
+omp plugin upgrade
+```
+
+For the isolated `grk` profile used above, run the same commands through the alias:
+
+```bash
+grk plugin marketplace update
+grk plugin upgrade
 ```
 
 The package is currently marked `private: true`; remove that before npm publishing.
