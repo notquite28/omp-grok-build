@@ -18,49 +18,129 @@ Repo layout:
 └── package.json                      # marketplace workspace scripts only
 ```
 
-## Install (marketplace)
+## Install / uninstall
+
+Plugins install **independently**. Catalog id is `name@omp-ext`.
+
+```text
+omp-grok-build@omp-ext
+omp-rewind@omp-ext
+```
+
+`omp install` is the top-level convenience for local paths, npm specs, and marketplace refs. `omp plugin …` is the full lifecycle CLI.
+
+### 1. Add the marketplace (once per profile)
 
 ```bash
-# once per profile
 omp plugin marketplace add notquite28/omp-ext
-# or with the grk profile alias:
-grk plugin marketplace add notquite28/omp-ext
 
-# install plugins independently
+# local checkout while developing this repo
+omp plugin marketplace add ./path/to/omp-ext
+
+# list / refresh / remove marketplaces
+omp plugin marketplace list
+omp plugin marketplace update              # all
+omp plugin marketplace update omp-ext      # one
+omp plugin marketplace remove omp-ext
+```
+
+With the Grok profile alias (`omp --profile grok-build --alias grk`), the same commands work as `grk …`.
+
+### 2. Install plugins
+
+```bash
+# marketplace (preferred for update tracking)
 omp install omp-grok-build@omp-ext
 omp install omp-rewind@omp-ext
+
+# equivalent explicit form
+omp plugin install omp-grok-build@omp-ext
+omp plugin install omp-rewind@omp-ext
+
+# project-scoped (optional)
+omp install omp-rewind@omp-ext --scope project
+
+# discover available catalog entries
+omp plugin discover
+omp plugin discover omp-ext
 ```
 
-With the isolated Grok profile alias (`omp --profile grok-build --alias grk`):
+### 3. List, enable, disable
 
 ```bash
-grk install omp-grok-build@omp-ext
-grk install omp-rewind@omp-ext
+omp plugin list
+omp plugin list --json
+
+omp plugin disable omp-rewind@omp-ext
+omp plugin enable omp-rewind@omp-ext
 ```
 
-### Update
+### 4. Upgrade
 
 ```bash
-grk plugin marketplace update
-grk plugin upgrade
-# or one plugin:
-grk plugin upgrade omp-rewind@omp-ext
-grk plugin upgrade omp-grok-build@omp-ext
+# refresh catalog from GitHub (or local source), then upgrade installs
+omp plugin marketplace update
+omp plugin upgrade                         # all outdated marketplace plugins
+omp plugin upgrade omp-rewind@omp-ext
+omp plugin upgrade omp-grok-build@omp-ext
 ```
 
-`marketplace update` refreshes the catalog from GitHub; `plugin upgrade` applies newer catalog versions to installed marketplace plugins.
+`marketplace update` only refreshes the catalog. `plugin upgrade` applies newer catalog versions to installed marketplace plugins.
 
-## Local development
+### 5. Uninstall plugins
 
 ```bash
-# link a single plugin from a checkout
+# marketplace installs — use name@marketplace
+omp plugin uninstall omp-rewind@omp-ext
+omp plugin uninstall omp-grok-build@omp-ext
+
+# project-scoped install
+omp plugin uninstall omp-rewind@omp-ext --scope project
+
+# linked / local path installs — use the package name
+omp plugin uninstall omp-rewind
+omp plugin uninstall omp-grok-build
+```
+
+There is no top-level `omp remove`; use `omp plugin uninstall`.
+
+### 6. Local development (link)
+
+```bash
+# symlink a checkout into the plugin set (watches for changes)
 omp install ./plugins/omp-grok-build --force
 omp install ./plugins/omp-rewind --force
 
-# or for the grk profile
-grk install ./plugins/omp-grok-build --force
-grk install ./plugins/omp-rewind --force
+# equivalent
+omp plugin link ./plugins/omp-rewind
+omp plugin install ./plugins/omp-rewind --force
+
+# one-shot session load without installing
+omp --extension ./plugins/omp-rewind
+omp -e ./plugins/omp-rewind
 ```
+
+Unlink/remove local installs with `omp plugin uninstall omp-rewind` (or `omp-grok-build`).
+
+### Quick reference
+
+| Action | Command |
+| --- | --- |
+| Add marketplace | `omp plugin marketplace add notquite28/omp-ext` |
+| List marketplaces | `omp plugin marketplace list` |
+| Update catalog | `omp plugin marketplace update` |
+| Remove marketplace | `omp plugin marketplace remove omp-ext` |
+| Discover plugins | `omp plugin discover [omp-ext]` |
+| Install plugin | `omp install name@omp-ext` |
+| List installed | `omp plugin list` |
+| Upgrade plugin(s) | `omp plugin upgrade [name@omp-ext]` |
+| Disable / enable | `omp plugin disable\|enable name@omp-ext` |
+| Uninstall plugin | `omp plugin uninstall name@omp-ext` |
+| Link local path | `omp install ./plugins/<name> --force` |
+
+## Local development
+
+Link plugins with `omp install ./plugins/<name> --force` (see [Install / uninstall](#install--uninstall) above).
 
 Tests:
 

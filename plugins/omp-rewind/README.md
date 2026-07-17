@@ -25,34 +25,45 @@ Shipped from the multi-plugin marketplace as **`omp-rewind@omp-ext`** (sibling o
 - Footer status indicator (`◆ X checkpoints`)
 - Auto-prune old sessions and per-session cap (50)
 
-## Install
+## Install / uninstall
 
 ```bash
-# Marketplace (preferred for updates)
+# once per profile — add the marketplace
 omp plugin marketplace add notquite28/omp-ext
+
+# install
 omp install omp-rewind@omp-ext
+# equivalent: omp plugin install omp-rewind@omp-ext
 
 # update later
 omp plugin marketplace update
 omp plugin upgrade omp-rewind@omp-ext
 
+# list / disable / enable
+omp plugin list
+omp plugin disable omp-rewind@omp-ext
+omp plugin enable omp-rewind@omp-ext
+
+# uninstall marketplace install
+omp plugin uninstall omp-rewind@omp-ext
+
 # local link while developing this monorepo
 omp install ./plugins/omp-rewind --force
 # absolute
-omp install /path/to/omp-grok-build/plugins/omp-rewind --force
+omp install /path/to/omp-ext/plugins/omp-rewind --force
+# remove a linked install
+omp plugin uninstall omp-rewind
 
 # one-shot session load (no install)
 omp --extension ./plugins/omp-rewind
 omp -e ./plugins/omp-rewind
-
-# list / uninstall
-omp plugin list
-omp plugin uninstall omp-rewind
 ```
 
 With profile alias `grk` (`omp --profile grok-build --alias grk`), use the same commands via `grk …`.
 
 Lower-level aliases: `omp plugin link <path>`, `omp plugin install <path>`. Prefer `omp install`.
+
+Full marketplace lifecycle (add/remove catalog, scopes, discover): see the [repo root README](../../README.md#install--uninstall).
 
 ### Esc+Esc coexistence
 
