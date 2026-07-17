@@ -1,6 +1,6 @@
 {
   "name": "omp-ext",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Oh My Pi extension marketplace (omp-grok-build, omp-rewind, \u2026)",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "omp-rewind",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Git checkpoint/rewind extension for Oh My Pi — /rewind, Esc+Esc, safe restore, redo stack",
   "license": "MIT",
   "type": "module",

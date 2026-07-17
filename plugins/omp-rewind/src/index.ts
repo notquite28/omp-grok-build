@@ -28,7 +28,7 @@ import {
 } from "./core.js";
 import { createInitialState, resetState } from "./state.js";
 import { updateStatus, clearStatus } from "./ui.js";
-import { registerCommands, handleForkRestore, handleTreeRestore } from "./commands.js";
+import { registerCommands, handleForkRestore, handleTreeRestore, runQuickRewind } from "./commands.js";
 
 /** Truncate a string to maxLen, adding ellipsis if needed */
 function truncate(s: string, maxLen: number): string {
@@ -60,9 +60,55 @@ function describeToolCall(toolName: string, input: any): string {
 
 export default function (pi: ExtensionAPI) {
   const state = createInitialState();
+  let unbindDoubleEscape: (() => void) | null = null;
+  let lastEscapeAt = 0;
+  let quickRewindBusy = false;
 
-  // Register /rewind command and Esc+Esc shortcut
+  // Register /rewind command
   registerCommands(pi, state);
+
+  // Esc+Esc via raw terminal input (OMP KeyId has no multi-key chords).
+  // Prefer doubleEscapeAction: none in config when this should own Esc+Esc alone.
+  function bindDoubleEscape(ctx: any): void {
+    unbindDoubleEscape?.();
+    unbindDoubleEscape = null;
+    lastEscapeAt = 0;
+    if (!ctx?.hasUI || typeof ctx.ui?.onTerminalInput !== "function") return;
+
+    unbindDoubleEscape = ctx.ui.onTerminalInput((data: string) => {
+      // Bare ESC or CSI-u Escape from kitty/ghostty keyboard protocol.
+      const isEscape = data === "\x1b" || data === "\x1b\x1b" || data === "\x1b[27u";
+      if (!isEscape) {
+        lastEscapeAt = 0;
+        return undefined;
+      }
+
+      // Picker/dialog is open: never consume Esc (select needs it to cancel).
+      // Also reset the double-Esc window so Esc dismisses without re-arming.
+      if (quickRewindBusy) {
+        lastEscapeAt = 0;
+        return undefined;
+      }
+
+      const now = Date.now();
+      if (now - lastEscapeAt < 500) {
+        lastEscapeAt = 0;
+        quickRewindBusy = true;
+        void runQuickRewind(state, ctx)
+          .catch(() => {})
+          .finally(() => {
+            quickRewindBusy = false;
+            lastEscapeAt = 0;
+          });
+        // Consume only the second Esc that arms the picker.
+        return { consume: true };
+      }
+
+      lastEscapeAt = now;
+      // Let the first Esc through so OMP can still interrupt/clear if needed.
+      return undefined;
+    });
+  }
 
   // ========================================================================
   // Session lifecycle
@@ -127,15 +173,34 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  pi.on("session_start", async (event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    // OMP SessionStartEvent has no reason field; initial load only.
+    await initSession(ctx);
+    bindDoubleEscape(ctx);
+  });
+
+  // /new, /resume, /fork, handoff — OMP emits session_switch, not session_start.
+  pi.on("session_switch", async (event, ctx) => {
     if (event.reason === "fork") {
-      // Fork: just update session ID for new checkpoint tagging
-      if (!state.gitAvailable) return;
-      state.sessionId = ctx.sessionManager.getSessionId();
+      // Fork: keep existing checkpoints, retag new session id.
+      // Host clears terminal-input listeners across session file changes — rebind.
+      if (state.gitAvailable) {
+        state.sessionId = ctx.sessionManager.getSessionId();
+      }
+      bindDoubleEscape(ctx);
       return;
     }
-    // startup, reload, new, resume: full re-initialization
     await initSession(ctx);
+    bindDoubleEscape(ctx);
+  });
+
+  // /branch creates a new session file; retag so new checkpoints stay isolated.
+  pi.on("session_branch", async (_event, ctx) => {
+    if (state.gitAvailable) {
+      state.sessionId = ctx.sessionManager.getSessionId();
+    }
+    // Host may clear extension terminal listeners on branch — rebind Esc+Esc.
+    bindDoubleEscape(ctx);
   });
 
   // ========================================================================
@@ -264,7 +329,8 @@ export default function (pi: ExtensionAPI) {
   // Fork / tree restore hooks
   // ========================================================================
 
-  pi.on("session_before_fork", async (event, ctx) => {
+  // OMP uses session_before_branch (Pi renamed it to session_before_fork).
+  pi.on("session_before_branch", async (event, ctx) => {
     return handleForkRestore(state, event, ctx);
   });
 
