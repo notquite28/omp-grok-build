@@ -44,7 +44,16 @@ describe("Grok Build billing", () => {
       resetsAt: "2026-08-01T00:00:00Z",
     });
     expect(usage.weekly).toEqual({ percentUsed: 42, resetsAt: "2026-07-15T00:00:00Z" });
-    expect(formatBillingUsage(usage)).toContain("12,000 credits");
+    const formatted = formatBillingUsage(usage, Date.parse("2026-07-14T00:00:00Z"));
+    expect(formatted).toContain("Grok Build usage");
+    expect(formatted).toContain("✓ Monthly");
+    expect(formatted).toContain("12,000 remaining");
+    expect(formatted).toContain("3,000 / 15,000 credits used");
+    expect(formatted).toContain("80% free");
+    expect(formatted).toContain("✓ Weekly");
+    expect(formatted).toContain("58% free");
+    expect(formatted).toMatch(/█+░+/);
+    expect(formatted).toContain("resets in");
   });
 
   test("keeps monthly usage when weekly billing data is malformed", async () => {
