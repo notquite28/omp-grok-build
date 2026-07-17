@@ -112,6 +112,7 @@ resets in 2d21h (2026-07-20)
 - Status icon: `✓` ok, `!` ≥80% used, `✗` exhausted
 - Bar shows **used** fraction; trailing label is **% free**
 - Reset times are relative (`5d5h`, `3h12m`) plus ISO date
+- A zero-credit monthly allocation is unavailable: `✗`, `0% free`, and `0 remaining`.
 
 ### Imagine (`/grok-build-imagine`)
 

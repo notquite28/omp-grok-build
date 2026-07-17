@@ -56,6 +56,21 @@ describe("Grok Build billing", () => {
     expect(formatted).toContain("resets in");
   });
 
+  test("reports zero free capacity for a zero-limit monthly allocation", () => {
+    const formatted = formatBillingUsage({
+      monthly: {
+        limit: 0,
+        used: 0,
+        resetsAt: "2026-08-01T00:00:00Z",
+      },
+    }, Date.parse("2026-07-14T00:00:00Z"));
+
+    expect(formatted).toContain("✗ Monthly");
+    expect(formatted).toContain("0 / 0 credits used · 0 remaining");
+    expect(formatted).toContain("0% free");
+    expect(formatted).not.toContain("100% free");
+  });
+
   test("keeps monthly usage when weekly billing data is malformed", async () => {
     const fakeFetch = (async (input: string | URL | Request) => {
       if (String(input).endsWith("?format=credits")) return Response.json({ config: { creditUsagePercent: 101 } });

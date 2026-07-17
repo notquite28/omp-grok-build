@@ -133,8 +133,8 @@ function formatResetMeta(value: string, nowMs: number): { remaining: string; abs
   };
 }
 
-function statusIcon(usedFraction: number): string {
-  if (usedFraction >= 1) return "✗";
+function statusIcon(usedFraction: number, hasCapacity: boolean): string {
+  if (!hasCapacity || usedFraction >= 1) return "✗";
   if (usedFraction >= WARNING_USED_FRACTION) return "!";
   return "✓";
 }
@@ -155,18 +155,20 @@ function formatPercent(value: number): string {
 function formatWindow(
   label: string,
   usedFraction: number,
+  freeFraction: number,
+  hasCapacity: boolean,
   detail: string | undefined,
   resetsAt: string,
   nowMs: number,
 ): string[] {
-  const freeFraction = clamp01(1 - usedFraction);
+  const clampedFreeFraction = clamp01(freeFraction);
   const reset = formatResetMeta(resetsAt, nowMs);
   const identity = "credits";
   const pad = Math.max(1, 34 - identity.length - reset.remaining.length);
   const lines = [
-    `${statusIcon(usedFraction)} ${label}`,
+    `${statusIcon(usedFraction, hasCapacity)} ${label}`,
     `● ${identity}${" ".repeat(pad)}(${reset.remaining})`,
-    `${renderUsedBar(usedFraction)}    ${formatPercent(freeFraction * 100)}% free`,
+    `${renderUsedBar(usedFraction)}    ${formatPercent(clampedFreeFraction * 100)}% free`,
   ];
   if (detail) lines.push(detail);
   lines.push(`resets in ${reset.remaining} (${reset.absolute})`);
@@ -174,8 +176,10 @@ function formatWindow(
 }
 
 export function formatBillingUsage(usage: BillingUsage, nowMs: number = Date.now()): string {
-  const monthlyUsedFraction =
-    usage.monthly.limit > 0 ? clamp01(usage.monthly.used / usage.monthly.limit) : 0;
+  const monthlyUsedFraction = usage.monthly.limit > 0
+    ? clamp01(usage.monthly.used / usage.monthly.limit)
+    : 0;
+  const monthlyFreeFraction = usage.monthly.limit > 0 ? 1 - monthlyUsedFraction : 0;
   const monthlyRemaining = Math.max(usage.monthly.limit - usage.monthly.used, 0);
   const monthlyDetail =
     `${usage.monthly.used.toLocaleString()} / ${usage.monthly.limit.toLocaleString()} credits used` +
@@ -187,6 +191,8 @@ export function formatBillingUsage(usage: BillingUsage, nowMs: number = Date.now
     ...formatWindow(
       "Monthly",
       monthlyUsedFraction,
+      monthlyFreeFraction,
+      usage.monthly.limit > 0,
       monthlyDetail,
       usage.monthly.resetsAt,
       nowMs,
@@ -195,11 +201,14 @@ export function formatBillingUsage(usage: BillingUsage, nowMs: number = Date.now
 
   if (usage.weekly) {
     const weeklyUsedFraction = clamp01(usage.weekly.percentUsed / 100);
+    const weeklyFreeFraction = 1 - weeklyUsedFraction;
     lines.push("");
     lines.push(
       ...formatWindow(
         "Weekly",
         weeklyUsedFraction,
+        weeklyFreeFraction,
+        true,
         `${formatPercent(usage.weekly.percentUsed)}% used this week`,
         usage.weekly.resetsAt,
         nowMs,
