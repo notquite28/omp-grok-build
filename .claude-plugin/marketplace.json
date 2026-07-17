@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "OMP extension marketplace: Grok Build provider and git rewind",
-    "version": "0.2.1"
+    "version": "0.2.2"
   },
   "plugins": [
     {
@@ -24,8 +24,8 @@
     },
     {
       "name": "omp-rewind",
-      "version": "0.5.1",
-      "description": "Git checkpoint/rewind for Oh My Pi \u2014 /rewind, Esc+Esc, safe restore, redo stack",
+      "version": "0.5.2",
+      "description": "Git checkpoint/rewind for Oh My Pi \u2014 /rewind, tree/branch file restore, safe restore, redo stack",
       "category": "development",
       "tags": [
         "rewind",

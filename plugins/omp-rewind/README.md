@@ -1,21 +1,21 @@
 # omp-rewind
 
-Git checkpoint/rewind extension for [Oh My Pi](https://omp.sh). Creates automatic git-based snapshots of your working tree so you can rewind file changes and conversation state when the agent makes mistakes.
+Git checkpoint/rewind extension for [Oh My Pi](https://omp.sh). Creates automatic git-based snapshots of your working tree so you can rewind file changes (and optionally conversation) when the agent makes mistakes.
 
 Port of [pi-rewind](https://github.com/arpagon/pi-rewind) for OMP: `omp.extensions` manifest, `@oh-my-pi/pi-coding-agent` types, and expanded mutating-tool coverage for OMP builtins (`ast_edit`, `eval`).
 
 Shipped from the multi-plugin marketplace as **`omp-rewind@omp-ext`** (sibling of `omp-grok-build`, not the same package).
 
-> **Not the same as OMP’s built-in `checkpoint`/`rewind` tools.** Those (setting `checkpoint.enabled`) collapse conversation history only. This extension stores **git worktree snapshots** and exposes `/rewind` + Esc+Esc for restore. Keep both; they solve different problems.
+> **Not the same as OMP’s built-in `checkpoint`/`rewind` tools.** Those (setting `checkpoint.enabled`) collapse conversation history only. This extension stores **git worktree snapshots** and exposes `/rewind` plus restore prompts on `/tree` / `/branch`. Keep both; they solve different problems.
 
 ## Features
 
-- Dedicated `/rewind` command — checkpoint browser → diff preview → restore
-- `Esc+Esc` keyboard shortcut — quick files-only rewind
+- Dedicated `/rewind` command — checkpoint browser → diff preview → restore modes
+- Session tree / branch integration — pick an earlier message, optionally restore files
 - Smart checkpointing — snapshots after write/edit/bash/ast_edit/eval, 1 per turn
 - Smart dedup — skips checkpoints when worktree unchanged
 - Descriptive labels — `"user prompt" → write → file.ts, edit → other.ts`
-- Diff preview before restore
+- Diff preview before restore (`/rewind`)
 - Branch labels in picker — `[feature]` for same-branch, `⚠️ main` for cross-branch
 - Redo stack (multi-level undo) — "↩ Undo last rewind"
 - Restore options: files + conversation, files only, conversation only
@@ -65,15 +65,21 @@ Lower-level aliases: `omp plugin link <path>`, `omp plugin install <path>`. Pref
 
 Full marketplace lifecycle (add/remove catalog, scopes, discover): see the [repo root README](../../README.md#install--uninstall).
 
-### Esc+Esc coexistence
+### How to rewind
 
-If double-Esc also opens OMP’s tree selector (`doubleEscapeAction`, default `"tree"`), set in `~/.omp/agent/config.yml`:
+| Goal | How |
+| --- | --- |
+| Git checkpoint browser (diff + restore modes) | **`/rewind`** |
+| Jump conversation to an earlier message | **`/tree`** or **Esc+Esc** (host, default) |
+| Optional file restore after tree/branch pick | Prompt: *Keep current files* / *Restore files to that point* |
+| Branch from a user message | **`/branch`** (same file-restore prompt when applicable) |
+
+Esc+Esc is owned by OMP (`doubleEscapeAction`, default `"tree"`). This extension does **not** capture double-Esc, so the session tree stays available. Git-only restore is always **`/rewind`**.
 
 ```yaml
-doubleEscapeAction: none
+# ~/.omp/agent/config.yml — host double-Esc (default is already tree)
+doubleEscapeAction: tree   # or "branch" | "none"
 ```
-
-when you want only git-rewind on Esc+Esc.
 
 ## Architecture
 
@@ -83,7 +89,7 @@ Two-layer split: `core.ts` is pure git operations with zero coding-agent depende
 src/
 ├── core.ts       # git operations, filtering, safe restore, branch safety, prune
 ├── index.ts      # OMP event hooks, checkpoint scheduling, auto-prune
-├── commands.ts   # /rewind, Esc+Esc, fork/tree handlers
+├── commands.ts   # /rewind, fork/tree restore handlers
 ├── state.ts      # shared mutable state
 └── ui.ts         # footer status indicator
 ```
