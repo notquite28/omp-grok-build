@@ -1,12 +1,11 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import type { Api, Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { loginToGrok, refreshGrokCredentials, resolveGrokVersion } from "./auth";
-import { discoveryHeaders, withGrokRequestHeaders } from "./headers";
+import { discoveryHeaders } from "./headers";
 import { registerUsageCommand } from "./usage";
 import { registerImagineCommand } from "./imagine";
 import { fetchGrokCliModels } from "./models";
 import { sanitizeProxyPayload } from "./payload";
+import { streamGrokBuildResponses } from "./stream";
 
 const PROVIDER_ID = "grok-build";
 const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
@@ -15,21 +14,6 @@ const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 // header-bearing dynamic models unrestorable and drops them offline).
 const API_ID = "grok-build-responses";
 
-function streamGrokBuildResponses(
-  model: Model<Api>,
-  context: Context,
-  options: SimpleStreamOptions | undefined,
-  clientVersion: string,
-) {
-  // streamSimple resolves ApiKeyResolver before dispatch; cast to the string
-  // apiKey surface expected by the Responses transport.
-  const base = (options ?? {}) as Omit<SimpleStreamOptions, "apiKey"> & { apiKey?: string };
-  return streamOpenAIResponses(model as Model<"openai-responses">, context, {
-    ...base,
-    headers: withGrokRequestHeaders(model.id, clientVersion, base.headers),
-  });
-}
-
 export default function grokBuildExtension(pi: ExtensionAPI): void {
   const clientVersion = resolveGrokVersion();
 
@@ -37,7 +21,8 @@ export default function grokBuildExtension(pi: ExtensionAPI): void {
     baseUrl: BASE_URL,
     // Custom API (not built-in openai-responses) so streamSimple can inject
     // x-grok-model-override + client headers on every request without storing
-    // them on cached model specs.
+    // them on cached model specs. Inner dispatch rebuilds as openai-responses
+    // so Responses compat is fully resolved (custom APIs get compat: undefined).
     api: API_ID,
     authHeader: true,
     streamSimple: (model, context, options) =>
