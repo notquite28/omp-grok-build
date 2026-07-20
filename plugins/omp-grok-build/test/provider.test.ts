@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ProviderConfig } from "@oh-my-pi/pi-coding-agent";
+import { withGrokRequestHeaders } from "../src/headers";
 import grokBuildExtension from "../src/main";
 
 const originalVersion = process.env.GROK_CLI_VERSION;
@@ -21,60 +22,79 @@ afterEach(() => {
   else process.env.GROK_CLI_VERSION = originalVersion;
 });
 
-describe("Grok Build provider", () => {
-  test("routes only through the CLI entitlement proxy with required headers", async () => {
-    process.env.GROK_CLI_VERSION = "9.8.7";
-    let registration: { name: string; config: ProviderConfig } | undefined;
-    const pi = {
-      registerProvider(name: string, config: ProviderConfig) {
-        registration = { name, config };
+function mockPi(): {
+  pi: ExtensionAPI;
+  registration: { name: string; config: ProviderConfig } | undefined;
+  getRegistration(): { name: string; config: ProviderConfig } | undefined;
+} {
+  let registration: { name: string; config: ProviderConfig } | undefined;
+  const pi = {
+    registerProvider(name: string, config: ProviderConfig) {
+      registration = { name, config };
+    },
+    registerCommand() {},
+    registerTool() {},
+    zod: {
+      z: {
+        object: () => ({}),
+        string: () => ({
+          describe() {
+            return this;
+          },
+          optional() {
+            return this;
+          },
+        }),
       },
-      registerCommand() {},
-      registerTool() {},
-      zod: { z: { object: () => ({}), string: () => ({ describe() { return this; }, optional() { return this; } }) } },
-      on() {},
-    } as unknown as ExtensionAPI;
+    },
+    on() {},
+  } as unknown as ExtensionAPI;
+  return {
+    pi,
+    get registration() {
+      return registration;
+    },
+    getRegistration() {
+      return registration;
+    },
+  };
+}
+
+describe("Grok Build provider", () => {
+  test("routes only through the CLI entitlement proxy with cache-safe models", async () => {
+    process.env.GROK_CLI_VERSION = "9.8.7";
+    const { pi, getRegistration } = mockPi();
 
     grokBuildExtension(pi);
+    const registration = getRegistration();
 
     expect(registration?.name).toBe("grok-build");
     expect(registration?.config.baseUrl).toBe(BASE_URL);
     expect(registration?.config.baseUrl).not.toContain("api.x.ai");
-    expect(registration?.config.api).toBe("openai-responses");
+    expect(registration?.config.api).toBe("grok-build-responses");
     expect(registration?.config.authHeader).toBe(true);
     expect(registration?.config.headers).toBeUndefined();
     expect(registration?.config.models).toBeUndefined();
+    expect(registration?.config.streamSimple).toEqual(expect.any(Function));
     expect(registration?.config.fetchDynamicModels).toEqual(expect.any(Function));
 
     const discovered = await registration?.config.fetchDynamicModels?.(undefined);
     expect(discovered?.map((model) => model.id)).toEqual(["grok-4.5"]);
-    expect(discovered?.find((model) => model.id === "grok-4.5")).toMatchObject({
+    const model = discovered?.find((entry) => entry.id === "grok-4.5");
+    expect(model).toMatchObject({
       id: "grok-4.5",
       reasoning: true,
       contextWindow: 500_000,
       maxTokens: 30_000,
       compat: { promptCacheSessionHeader: "x-grok-conv-id", supportsReasoningEffort: true },
-      headers: {
-        "X-XAI-Token-Auth": "xai-grok-cli",
-        "x-grok-model-override": "grok-4.5",
-        "x-grok-client-version": "9.8.7",
-        "x-grok-client-identifier": "grok-pager",
-      },
     });
+    // Cache-safe: no per-model headers (host drops header-bearing dynamic models offline).
+    expect(model?.headers).toBeUndefined();
   });
 
   test("fetchDynamicModels surfaces live proxy catalog entries", async () => {
     process.env.GROK_CLI_VERSION = "9.8.7";
-    let registration: { name: string; config: ProviderConfig } | undefined;
-    const pi = {
-      registerProvider(name: string, config: ProviderConfig) {
-        registration = { name, config };
-      },
-      registerCommand() {},
-      registerTool() {},
-      zod: { z: { object: () => ({}), string: () => ({ describe() { return this; }, optional() { return this; } }) } },
-      on() {},
-    } as unknown as ExtensionAPI;
+    const { pi, getRegistration } = mockPi();
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -98,22 +118,31 @@ describe("Grok Build provider", () => {
 
     try {
       grokBuildExtension(pi);
-      const discovered = await registration?.config.fetchDynamicModels?.("live-key");
+      const discovered = await getRegistration()?.config.fetchDynamicModels?.("live-key");
       expect(discovered?.map((model) => model.id)).toEqual(["grok-5"]);
       expect(discovered?.[0]).toMatchObject({
         id: "grok-5",
         name: "Grok 5",
         reasoning: true,
         contextWindow: 750_000,
-        headers: {
-          "x-grok-model-override": "grok-5",
-          "x-grok-client-version": "9.8.7",
-        },
         thinking: { mode: "effort", efforts: ["high", "xhigh"] },
       });
+      expect(discovered?.[0]?.headers).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("request headers inject proxy routing override without caching on models", () => {
+    const headers = withGrokRequestHeaders("grok-4.5", "9.8.7", { "x-extra": "1" });
+    expect(headers).toMatchObject({
+      "X-XAI-Token-Auth": "xai-grok-cli",
+      "x-grok-model-override": "grok-4.5",
+      "x-grok-client-version": "9.8.7",
+      "x-grok-client-identifier": "grok-pager",
+      "x-extra": "1",
+    });
+    expect(headers["User-Agent"]).toContain("grok-pager/9.8.7");
   });
 
   test("sanitizes only canonical Grok Build requests", () => {
@@ -122,7 +151,19 @@ describe("Grok Build provider", () => {
       registerProvider() {},
       registerCommand() {},
       registerTool() {},
-      zod: { z: { object: () => ({}), string: () => ({ describe() { return this; }, optional() { return this; } }) } },
+      zod: {
+        z: {
+          object: () => ({}),
+          string: () => ({
+            describe() {
+              return this;
+            },
+            optional() {
+              return this;
+            },
+          }),
+        },
+      },
       on(_event: string, handler: ProviderHook) {
         hook = handler;
       },

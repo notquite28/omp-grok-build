@@ -1,5 +1,8 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { Api, Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { loginToGrok, refreshGrokCredentials, resolveGrokVersion } from "./auth";
+import { discoveryHeaders, withGrokRequestHeaders } from "./headers";
 import { registerUsageCommand } from "./usage";
 import { registerImagineCommand } from "./imagine";
 import { fetchGrokCliModels } from "./models";
@@ -7,17 +10,24 @@ import { sanitizeProxyPayload } from "./payload";
 
 const PROVIDER_ID = "grok-build";
 const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+// Custom API id so we can inject proxy headers at request time without
+// baking per-model headers into the host SQLite model cache (which marks
+// header-bearing dynamic models unrestorable and drops them offline).
+const API_ID = "grok-build-responses";
 
-function clientHeaders(modelId: string, version: string): Record<string, string> {
-  const platform = process.platform === "darwin" ? "macos" : process.platform;
-  const arch = process.arch === "arm64" ? "aarch64" : process.arch;
-  return {
-    "User-Agent": `grok-pager/${version} grok-shell/${version} (${platform}; ${arch})`,
-    "X-XAI-Token-Auth": "xai-grok-cli",
-    "x-grok-model-override": modelId,
-    "x-grok-client-version": version,
-    "x-grok-client-identifier": "grok-pager",
-  };
+function streamGrokBuildResponses(
+  model: Model<Api>,
+  context: Context,
+  options: SimpleStreamOptions | undefined,
+  clientVersion: string,
+) {
+  // streamSimple resolves ApiKeyResolver before dispatch; cast to the string
+  // apiKey surface expected by the Responses transport.
+  const base = (options ?? {}) as Omit<SimpleStreamOptions, "apiKey"> & { apiKey?: string };
+  return streamOpenAIResponses(model as Model<"openai-responses">, context, {
+    ...base,
+    headers: withGrokRequestHeaders(model.id, clientVersion, base.headers),
+  });
 }
 
 export default function grokBuildExtension(pi: ExtensionAPI): void {
@@ -25,8 +35,13 @@ export default function grokBuildExtension(pi: ExtensionAPI): void {
 
   pi.registerProvider(PROVIDER_ID, {
     baseUrl: BASE_URL,
-    api: "openai-responses",
+    // Custom API (not built-in openai-responses) so streamSimple can inject
+    // x-grok-model-override + client headers on every request without storing
+    // them on cached model specs.
+    api: API_ID,
     authHeader: true,
+    streamSimple: (model, context, options) =>
+      streamGrokBuildResponses(model, context, options, clientVersion),
     oauth: {
       name: "Grok Build CLI",
       login: (callbacks) => loginToGrok(callbacks, clientVersion),
@@ -37,19 +52,13 @@ export default function grokBuildExtension(pi: ExtensionAPI): void {
     // (`models` early-returns before the dynamic path). Prefer live discovery
     // so the picker tracks the proxy catalog; fetchGrokCliModels falls back to
     // GROK_CLI_MODELS when unauthenticated or discovery fails.
+    //
+    // Intentionally omit model/provider `headers` here: the host cache never
+    // persists headers, and dynamic-only header-bearing models become
+    // unrestorable on offline hydrate (no-model / empty picker).
     fetchDynamicModels: async (apiKey) => {
-      const platform = process.platform === "darwin" ? "macos" : process.platform;
-      const arch = process.arch === "arm64" ? "aarch64" : process.arch;
-      const models = await fetchGrokCliModels(apiKey, {
-        "User-Agent": `grok-pager/${clientVersion} grok-shell/${clientVersion} (${platform}; ${arch})`,
-        "X-XAI-Token-Auth": "xai-grok-cli",
-        "x-grok-client-version": clientVersion,
-        "x-grok-client-identifier": "grok-pager",
-      });
-      return models.map(({ supportsReasoningEffort: _supports, ...model }) => ({
-        ...model,
-        headers: clientHeaders(model.id, clientVersion),
-      }));
+      const models = await fetchGrokCliModels(apiKey, discoveryHeaders(clientVersion));
+      return models.map(({ supportsReasoningEffort: _supports, ...model }) => model);
     },
   });
 
