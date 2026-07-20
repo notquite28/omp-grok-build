@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "omp-grok-build",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "description": "Grok Build CLI models via cli-chat-proxy, usage bars, and Grok Imagine (/grok-build-imagine, image_gen)",
       "category": "development",
       "tags": [

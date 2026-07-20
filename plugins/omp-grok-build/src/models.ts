@@ -1,7 +1,6 @@
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import type { ProviderModelConfig } from "@oh-my-pi/pi-coding-agent";
 
-const COST_COMPOSER = { input: 3, output: 15, cacheRead: 0.5, cacheWrite: 0 };
 const COST_45 = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 };
 const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as const;
@@ -27,6 +26,9 @@ export interface GrokCliModel extends ProviderModelConfig {
   supportsReasoningEffort: boolean;
 }
 
+// Keep this list aligned with what the Grok CLI proxy actually serves
+// (`grok models` / `~/.grok/models_cache.json`). Unserved ids must not be
+// registered — they show up as selectable but fail at request time.
 export const GROK_CLI_MODELS: readonly GrokCliModel[] = [
   {
     id: "grok-4.5",
@@ -39,17 +41,6 @@ export const GROK_CLI_MODELS: readonly GrokCliModel[] = [
     maxTokens: 30_000,
     thinking: { mode: "effort", efforts: ["low", "medium", "high"] as GrokEffort[] },
     compat: { ...GROK_PROXY_COMPAT, supportsReasoningEffort: true, omitReasoningEffort: false },
-  },
-  {
-    id: "grok-composer-2.5-fast",
-    name: "Composer 2.5",
-    reasoning: false,
-    supportsReasoningEffort: false,
-    input: ["text"],
-    cost: COST_COMPOSER,
-    contextWindow: 200_000,
-    maxTokens: 30_000,
-    compat: { ...GROK_PROXY_COMPAT, supportsReasoningEffort: false, omitReasoningEffort: true },
   },
 ];
 

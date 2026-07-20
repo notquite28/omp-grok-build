@@ -33,8 +33,19 @@ export default function grokBuildExtension(pi: ExtensionAPI): void {
       refreshToken: (credentials) => refreshGrokCredentials(credentials, clientVersion),
       getApiKey: (credentials) => credentials.access,
     },
+    // Host treats `models` and `fetchDynamicModels` as mutually exclusive
+    // (`models` early-returns before the dynamic path). Prefer live discovery
+    // so the picker tracks the proxy catalog; fetchGrokCliModels falls back to
+    // GROK_CLI_MODELS when unauthenticated or discovery fails.
     fetchDynamicModels: async (apiKey) => {
-      const models = await fetchGrokCliModels(apiKey, clientHeaders("grok-4.5", clientVersion));
+      const platform = process.platform === "darwin" ? "macos" : process.platform;
+      const arch = process.arch === "arm64" ? "aarch64" : process.arch;
+      const models = await fetchGrokCliModels(apiKey, {
+        "User-Agent": `grok-pager/${clientVersion} grok-shell/${clientVersion} (${platform}; ${arch})`,
+        "X-XAI-Token-Auth": "xai-grok-cli",
+        "x-grok-client-version": clientVersion,
+        "x-grok-client-identifier": "grok-pager",
+      });
       return models.map(({ supportsReasoningEffort: _supports, ...model }) => ({
         ...model,
         headers: clientHeaders(model.id, clientVersion),

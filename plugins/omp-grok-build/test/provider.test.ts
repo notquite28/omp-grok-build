@@ -44,14 +44,11 @@ describe("Grok Build provider", () => {
     expect(registration?.config.authHeader).toBe(true);
     expect(registration?.config.headers).toBeUndefined();
     expect(registration?.config.models).toBeUndefined();
-    expect(registration?.config.fetchDynamicModels).toBeFunction();
+    expect(registration?.config.fetchDynamicModels).toEqual(expect.any(Function));
 
-    const models = await registration?.config.fetchDynamicModels?.(undefined);
-    expect(models?.map((model) => model.id)).toEqual([
-      "grok-4.5",
-      "grok-composer-2.5-fast",
-    ]);
-    expect(models?.find((model) => model.id === "grok-4.5")).toMatchObject({
+    const discovered = await registration?.config.fetchDynamicModels?.(undefined);
+    expect(discovered?.map((model) => model.id)).toEqual(["grok-4.5"]);
+    expect(discovered?.find((model) => model.id === "grok-4.5")).toMatchObject({
       id: "grok-4.5",
       reasoning: true,
       contextWindow: 500_000,
@@ -64,6 +61,59 @@ describe("Grok Build provider", () => {
         "x-grok-client-identifier": "grok-pager",
       },
     });
+  });
+
+  test("fetchDynamicModels surfaces live proxy catalog entries", async () => {
+    process.env.GROK_CLI_VERSION = "9.8.7";
+    let registration: { name: string; config: ProviderConfig } | undefined;
+    const pi = {
+      registerProvider(name: string, config: ProviderConfig) {
+        registration = { name, config };
+      },
+      registerCommand() {},
+      registerTool() {},
+      zod: { z: { object: () => ({}), string: () => ({ describe() { return this; }, optional() { return this; } }) } },
+      on() {},
+    } as unknown as ExtensionAPI;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({
+        authorization: "Bearer live-key",
+        "x-grok-client-version": "9.8.7",
+        "X-XAI-Token-Auth": "xai-grok-cli",
+      });
+      return Response.json({
+        data: [
+          {
+            id: "grok-5",
+            name: "Grok 5",
+            context_window: 750_000,
+            supports_reasoning_effort: true,
+            reasoning_efforts: [{ value: "high" }, { value: "xhigh" }],
+          },
+        ],
+      });
+    }) as typeof fetch;
+
+    try {
+      grokBuildExtension(pi);
+      const discovered = await registration?.config.fetchDynamicModels?.("live-key");
+      expect(discovered?.map((model) => model.id)).toEqual(["grok-5"]);
+      expect(discovered?.[0]).toMatchObject({
+        id: "grok-5",
+        name: "Grok 5",
+        reasoning: true,
+        contextWindow: 750_000,
+        headers: {
+          "x-grok-model-override": "grok-5",
+          "x-grok-client-version": "9.8.7",
+        },
+        thinking: { mode: "effort", efforts: ["high", "xhigh"] },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("sanitizes only canonical Grok Build requests", () => {

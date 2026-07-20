@@ -73,10 +73,17 @@ Credentials are stored in OMP’s provider auth and refreshed through the normal
 
 ## Models
 
+Live catalog from `GET https://cli-chat-proxy.grok.com/v1/models` via
+`fetchDynamicModels` (host SQLite cache, 24h TTL). Falls back to the static
+seed when unauthenticated or discovery fails:
+
 ```text
 grok-build/grok-4.5
-grok-build/grok-composer-2.5-fast
 ```
+
+Keep `GROK_CLI_MODELS` aligned with what the CLI proxy currently serves
+(`grok models` / `~/.grok/models_cache.json`). Non-chat families
+(`grok-imagine-*`, `grok-stt-*`, `grok-voice-*`) are filtered out.
 
 (Plus any models returned live by the CLI proxy catalog.)
 
