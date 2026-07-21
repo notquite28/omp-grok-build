@@ -92,6 +92,53 @@ describe("Grok Build provider", () => {
     expect(model?.headers).toBeUndefined();
   });
 
+  test("streams custom API through OpenAI Responses transport", async () => {
+    process.env.GROK_CLI_VERSION = "9.8.7";
+    const { pi, getRegistration } = mockPi();
+    grokBuildExtension(pi);
+
+    let requestedUrl: string | undefined;
+    let requestedHeaders: Headers | undefined;
+    const stream = getRegistration()?.config.streamSimple?.(
+      {
+        api: "grok-build-responses",
+        baseUrl: BASE_URL,
+        id: "grok-4.5",
+        maxTokens: 30_000,
+        provider: "grok-build",
+      } as Parameters<NonNullable<ProviderConfig["streamSimple"]>>[0],
+      { messages: [] },
+      {
+        apiKey: "test-token",
+        sessionId: "session-123",
+        fetch: async (input: string | URL | Request, init?: RequestInit) => {
+          requestedUrl = input instanceof Request ? input.url : input.toString();
+          requestedHeaders = new Headers(input instanceof Request ? input.headers : undefined);
+          new Headers(init?.headers).forEach((value, key) => requestedHeaders?.set(key, value));
+          return new Response(
+            'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
+            { headers: { "content-type": "text/event-stream" }, status: 200 },
+          );
+        },
+      },
+    );
+
+    expect(stream).toBeDefined();
+    const emittedErrors: string[] = [];
+    for await (const event of stream!) {
+      if (event.type === "error" && event.error.errorMessage) {
+        emittedErrors.push(event.error.errorMessage);
+      }
+    }
+
+    expect(emittedErrors.join("\n")).not.toContain("Unhandled API in mapOptionsForApi");
+    expect(requestedUrl).toBe(`${BASE_URL}/responses`);
+    expect(requestedHeaders?.get("authorization")).toBe("Bearer test-token");
+    expect(requestedHeaders?.get("x-grok-model-override")).toBe("grok-4.5");
+    expect(requestedHeaders?.get("x-grok-client-version")).toBe("9.8.7");
+    expect(requestedHeaders?.get("X-XAI-Token-Auth")).toBe("xai-grok-cli");
+  });
+
   test("fetchDynamicModels surfaces live proxy catalog entries", async () => {
     process.env.GROK_CLI_VERSION = "9.8.7";
     const { pi, getRegistration } = mockPi();

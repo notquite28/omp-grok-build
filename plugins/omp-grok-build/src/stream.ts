@@ -1,5 +1,12 @@
-import { streamSimple } from "@oh-my-pi/pi-ai";
-import type { Api, Context, FetchImpl, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import { streamOpenAIResponses } from "@oh-my-pi/pi-ai";
+import type {
+  Api,
+  Context,
+  FetchImpl,
+  Model,
+  OpenAIResponsesOptions,
+  SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai";
 import { requestHeaders } from "./headers";
 
 const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
@@ -11,7 +18,7 @@ const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
  * pi-ai / pi-coding-agent / …, not pi-catalog). Rebuild a request-time model
  * as `openai-responses` with a complete compat object instead.
  */
-function toOpenAIResponsesModel(model: Model<Api>): Model<Api> {
+function toOpenAIResponsesModel(model: Model<Api>): Model<"openai-responses"> {
   const sparse = (model.compatConfig ?? model.compat ?? {}) as Record<string, unknown>;
   const supportsReasoningEffort =
     typeof sparse.supportsReasoningEffort === "boolean"
@@ -67,7 +74,32 @@ function toOpenAIResponsesModel(model: Model<Api>): Model<Api> {
     api: "openai-responses",
     compat,
     compatConfig: model.compatConfig,
-  } as Model<Api>;
+  } as Model<"openai-responses">;
+}
+
+function toOpenAIResponsesOptions(
+  model: Model<Api>,
+  options: SimpleStreamOptions | undefined,
+  fetch: FetchImpl,
+): OpenAIResponsesOptions {
+  if (typeof options?.apiKey !== "string") {
+    throw new Error("Grok Build custom transport requires a resolved API key");
+  }
+
+  return {
+    ...options,
+    apiKey: options.apiKey,
+    fetch,
+    maxTokens: options.maxTokens ?? model.maxTokens ?? undefined,
+    reasoning: options.reasoning,
+    disableReasoning: options.disableReasoning,
+    toolChoice: options.toolChoice,
+    serviceTier: options.serviceTier,
+    textVerbosity: options.textVerbosity,
+    openrouterVariant: options.openrouterVariant,
+    reasoningSummary: options.hideThinkingSummary ? null : undefined,
+    maxTokensExplicit: options.maxTokens !== undefined,
+  };
 }
 
 /**
@@ -100,8 +132,9 @@ export function streamGrokBuildResponses(
     innerFetch.preconnect ? { preconnect: innerFetch.preconnect } : {},
   );
 
-  return streamSimple(toOpenAIResponsesModel(model), context, {
-    ...options,
-    fetch: wrappedFetch,
-  });
+  return streamOpenAIResponses(
+    toOpenAIResponsesModel(model),
+    context,
+    toOpenAIResponsesOptions(model, options, wrappedFetch),
+  );
 }
