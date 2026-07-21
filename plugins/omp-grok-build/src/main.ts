@@ -1,50 +1,38 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { loginToGrok, refreshGrokCredentials, resolveGrokVersion } from "./auth";
-import { discoveryHeaders } from "./headers";
+import { requestHeaders } from "./headers";
 import { registerUsageCommand } from "./usage";
 import { registerImagineCommand } from "./imagine";
-import { fetchGrokCliModels } from "./models";
+import { GROK_CLI_MODELS } from "./models";
 import { sanitizeProxyPayload } from "./payload";
-import { streamGrokBuildResponses } from "./stream";
 
 const PROVIDER_ID = "grok-build";
 const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
-// Custom API id so we can inject proxy headers at request time without
-// baking per-model headers into the host SQLite model cache (which marks
-// header-bearing dynamic models unrestorable and drops them offline).
-const API_ID = "grok-build-responses";
+const API_ID = "openai-responses";
 
 export default function grokBuildExtension(pi: ExtensionAPI): void {
   const clientVersion = resolveGrokVersion();
 
   pi.registerProvider(PROVIDER_ID, {
     baseUrl: BASE_URL,
-    // Custom API (not built-in openai-responses) so streamSimple can inject
-    // x-grok-model-override + client headers on every request without storing
-    // them on cached model specs. Inner dispatch rebuilds as openai-responses
-    // so Responses compat is fully resolved (custom APIs get compat: undefined).
+    // Use OMP's built-in Responses API. Plan-mode subagents intentionally
+    // unload extension-scoped custom APIs, but retain the selected model and
+    // its request headers.
     api: API_ID,
     authHeader: true,
-    streamSimple: (model, context, options) =>
-      streamGrokBuildResponses(model, context, options, clientVersion),
     oauth: {
       name: "Grok Build CLI",
       login: (callbacks) => loginToGrok(callbacks, clientVersion),
       refreshToken: (credentials) => refreshGrokCredentials(credentials, clientVersion),
       getApiKey: (credentials) => credentials.access,
     },
-    // Host treats `models` and `fetchDynamicModels` as mutually exclusive
-    // (`models` early-returns before the dynamic path). Prefer live discovery
-    // so the picker tracks the proxy catalog; fetchGrokCliModels falls back to
-    // GROK_CLI_MODELS when unauthenticated or discovery fails.
-    //
-    // Intentionally omit model/provider `headers` here: the host cache never
-    // persists headers, and dynamic-only header-bearing models become
-    // unrestorable on offline hydrate (no-model / empty picker).
-    fetchDynamicModels: async (apiKey) => {
-      const models = await fetchGrokCliModels(apiKey, discoveryHeaders(clientVersion));
-      return models.map(({ supportsReasoningEffort: _supports, ...model }) => model);
-    },
+    // Static models keep their required routing headers across restarts.
+    // OMP's dynamic model cache intentionally omits headers, which would make
+    // these models unrestorable and leave plan-mode subagents with no model.
+    models: GROK_CLI_MODELS.map(({ supportsReasoningEffort: _supports, ...model }) => ({
+      ...model,
+      headers: requestHeaders(model.id, clientVersion),
+    })),
   });
 
   pi.on("before_provider_request", (event, ctx) => {
@@ -52,10 +40,8 @@ export default function grokBuildExtension(pi: ExtensionAPI): void {
     if (ctx.model.baseUrl !== BASE_URL) {
       throw new Error(`Grok Build requests require the canonical base URL ${BASE_URL}`);
     }
-    // Derive reasoning support from the live model metadata rather than the
-    // static catalog, so dynamically discovered reasoning models keep the
-    // user-selected thinking effort. `thinking.efforts` is only populated for
-    // models that expose a controllable reasoning-effort surface.
+    // `thinking.efforts` is populated only for models that expose a
+    // controllable reasoning-effort surface.
     const supportsReasoning = (ctx.model.thinking?.efforts?.length ?? 0) > 0;
     return sanitizeProxyPayload(
       event.payload,

@@ -61,7 +61,7 @@ function mockPi(): {
 }
 
 describe("Grok Build provider", () => {
-  test("routes only through the CLI entitlement proxy with cache-safe models", async () => {
+  test("uses the built-in Responses API with model-specific proxy headers", () => {
     process.env.GROK_CLI_VERSION = "9.8.7";
     const { pi, getRegistration } = mockPi();
 
@@ -71,116 +71,31 @@ describe("Grok Build provider", () => {
     expect(registration?.name).toBe("grok-build");
     expect(registration?.config.baseUrl).toBe(BASE_URL);
     expect(registration?.config.baseUrl).not.toContain("api.x.ai");
-    expect(registration?.config.api).toBe("grok-build-responses");
+    expect(registration?.config.api).toBe("openai-responses");
     expect(registration?.config.authHeader).toBe(true);
     expect(registration?.config.headers).toBeUndefined();
-    expect(registration?.config.models).toBeUndefined();
-    expect(registration?.config.streamSimple).toEqual(expect.any(Function));
-    expect(registration?.config.fetchDynamicModels).toEqual(expect.any(Function));
+    expect(registration?.config.models?.map((model) => model.id)).toEqual(["grok-4.5"]);
+    expect(registration?.config.streamSimple).toBeUndefined();
+    expect(registration?.config.fetchDynamicModels).toBeUndefined();
 
-    const discovered = await registration?.config.fetchDynamicModels?.(undefined);
-    expect(discovered?.map((model) => model.id)).toEqual(["grok-4.5"]);
-    const model = discovered?.find((entry) => entry.id === "grok-4.5");
+    const model = registration?.config.models?.find((entry) => entry.id === "grok-4.5");
     expect(model).toMatchObject({
       id: "grok-4.5",
       reasoning: true,
       contextWindow: 500_000,
       maxTokens: 30_000,
       compat: { promptCacheSessionHeader: "x-grok-conv-id", supportsReasoningEffort: true },
-    });
-    // Cache-safe: no per-model headers (host drops header-bearing dynamic models offline).
-    expect(model?.headers).toBeUndefined();
-  });
-
-  test("streams custom API through OpenAI Responses transport", async () => {
-    process.env.GROK_CLI_VERSION = "9.8.7";
-    const { pi, getRegistration } = mockPi();
-    grokBuildExtension(pi);
-
-    let requestedUrl: string | undefined;
-    let requestedHeaders: Headers | undefined;
-    const stream = getRegistration()?.config.streamSimple?.(
-      {
-        api: "grok-build-responses",
-        baseUrl: BASE_URL,
-        id: "grok-4.5",
-        maxTokens: 30_000,
-        provider: "grok-build",
-      } as Parameters<NonNullable<ProviderConfig["streamSimple"]>>[0],
-      { messages: [] },
-      {
-        apiKey: "test-token",
-        sessionId: "session-123",
-        fetch: async (input: string | URL | Request, init?: RequestInit) => {
-          requestedUrl = input instanceof Request ? input.url : input.toString();
-          requestedHeaders = new Headers(input instanceof Request ? input.headers : undefined);
-          new Headers(init?.headers).forEach((value, key) => requestedHeaders?.set(key, value));
-          return new Response(
-            'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
-            { headers: { "content-type": "text/event-stream" }, status: 200 },
-          );
-        },
-      },
-    );
-
-    expect(stream).toBeDefined();
-    const emittedErrors: string[] = [];
-    for await (const event of stream!) {
-      if (event.type === "error" && event.error.errorMessage) {
-        emittedErrors.push(event.error.errorMessage);
-      }
-    }
-
-    expect(emittedErrors.join("\n")).not.toContain("Unhandled API in mapOptionsForApi");
-    expect(requestedUrl).toBe(`${BASE_URL}/responses`);
-    expect(requestedHeaders?.get("authorization")).toBe("Bearer test-token");
-    expect(requestedHeaders?.get("x-grok-model-override")).toBe("grok-4.5");
-    expect(requestedHeaders?.get("x-grok-client-version")).toBe("9.8.7");
-    expect(requestedHeaders?.get("X-XAI-Token-Auth")).toBe("xai-grok-cli");
-  });
-
-  test("fetchDynamicModels surfaces live proxy catalog entries", async () => {
-    process.env.GROK_CLI_VERSION = "9.8.7";
-    const { pi, getRegistration } = mockPi();
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      expect(init?.headers).toMatchObject({
-        authorization: "Bearer live-key",
+      headers: {
+        "x-grok-model-override": "grok-4.5",
         "x-grok-client-version": "9.8.7",
         "X-XAI-Token-Auth": "xai-grok-cli",
-      });
-      return Response.json({
-        data: [
-          {
-            id: "grok-5",
-            name: "Grok 5",
-            context_window: 750_000,
-            supports_reasoning_effort: true,
-            reasoning_efforts: [{ value: "high" }, { value: "xhigh" }],
-          },
-        ],
-      });
-    }) as typeof fetch;
-
-    try {
-      grokBuildExtension(pi);
-      const discovered = await getRegistration()?.config.fetchDynamicModels?.("live-key");
-      expect(discovered?.map((model) => model.id)).toEqual(["grok-5"]);
-      expect(discovered?.[0]).toMatchObject({
-        id: "grok-5",
-        name: "Grok 5",
-        reasoning: true,
-        contextWindow: 750_000,
-        thinking: { mode: "effort", efforts: ["high", "xhigh"] },
-      });
-      expect(discovered?.[0]?.headers).toBeUndefined();
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+      },
+    });
   });
 
-  test("request headers inject proxy routing override without caching on models", () => {
+
+
+  test("request headers inject the proxy routing override", () => {
     const headers = withGrokRequestHeaders("grok-4.5", "9.8.7", { "x-extra": "1" });
     expect(headers).toMatchObject({
       "X-XAI-Token-Auth": "xai-grok-cli",

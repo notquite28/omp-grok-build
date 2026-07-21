@@ -73,19 +73,16 @@ Credentials are stored in OMP’s provider auth and refreshed through the normal
 
 ## Models
 
-Live catalog from `GET https://cli-chat-proxy.grok.com/v1/models` via
-`fetchDynamicModels` (host SQLite cache, 24h TTL). Falls back to the static
-seed when unauthenticated or discovery fails:
-
 ```text
 grok-build/grok-4.5
 ```
 
-Keep `GROK_CLI_MODELS` aligned with what the CLI proxy currently serves
-(`grok models` / `~/.grok/models_cache.json`). Non-chat families
-(`grok-imagine-*`, `grok-stt-*`, `grok-voice-*`) are filtered out.
+The provider uses a static model entry because the CLI proxy requires
+model-specific `x-grok-model-override` headers. OMP intentionally omits request
+headers from its dynamic-model cache; a dynamic entry would therefore become
+unrestorable after restart and unavailable to plan-mode subagents.
 
-(Plus any models returned live by the CLI proxy catalog.)
+Keep `GROK_CLI_MODELS` aligned with the chat models served by Grok Build.
 
 ## Commands
 
@@ -185,7 +182,7 @@ Layout:
 src/
   main.ts           # provider + command registration
   auth.ts           # OAuth / credentials
-  models.ts         # dynamic model catalog
+  models.ts         # static model catalog
   payload.ts        # before_provider_request sanitizer
   usage.ts          # /grok-build-usage + shared token resolve
   imagine/
