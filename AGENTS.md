@@ -9,7 +9,7 @@
 | `omp-grok-build` | `plugins/omp-grok-build/` | Grok Build CLI provider — chat/billing via the CLI entitlement proxy, usage bars, and Grok Imagine image/video commands and tools. |
 | `omp-rewind` | `plugins/omp-rewind/` | Git checkpoint/rewind — `/rewind`, transactional tree/file restore, durable undo. |
 
-Catalog (`.claude-plugin/marketplace.json`, Claude Code marketplace schema): name `omp-ext`, `metadata.version` `0.3.0`. End users install:
+Catalog (`.claude-plugin/marketplace.json`, Claude Code marketplace schema): name `omp-ext`, `metadata.version` `0.3.1`. End users install:
 
 ```text
 omp install omp-grok-build@omp-ext
@@ -66,12 +66,12 @@ src/index.ts  HOST WIRING (default export function(pi))
               ├─ /rewind command + session_before_branch/_tree hooks → restore
               └─ footer ◆ N checkpoints
 
-src/commands.ts  /rewind flow (UI-driven, no subcommands), transactional restore
+src/commands.ts  /rewind subcommands (restore/diff/status/help), UI-driven restore flow, transactional restore
 src/state.ts     in-memory singleton; persistence = git refs (no state file)
 src/ui.ts        footer renderer
 ```
 
-**Important:** this plugin does **not** register an `Esc+Esc`/`doubleEscapeAction` keybinding — `index.ts` leaves that to the host. Restore is exposed only via the `/rewind` command and the `session_before_branch` / `session_before_tree` hooks.
+**Important:** this plugin does **not** register an `Esc+Esc`/`doubleEscapeAction` keybinding — `index.ts` leaves that to the host. Restore is exposed only via `/rewind restore` and the `session_before_branch` / `session_before_tree` hooks.
 
 Checkpointing triggers after a turn uses any tool in `MUTATING_TOOLS` (`core.ts:66-72`):
 
@@ -79,7 +79,7 @@ Checkpointing triggers after a turn uses any tool in `MUTATING_TOOLS` (`core.ts:
 export const MUTATING_TOOLS = new Set(["write", "edit", "bash", "ast_edit", "eval"]);
 ```
 
-`/rewind` offers restore modes: `all` | `files` | `conversation` | `cancel`. Restore is **transactional** — a `before-restore` safety checkpoint is created first; on failure it rolls back to the safety cp (retained on double-failure). Cross-branch restore throws `Branch mismatch`.
+`/rewind restore` opens the checkpoint browser. It offers restore modes: `all` | `files` | `conversation` | `cancel`. Restore is **transactional** — a `before-restore` safety checkpoint is created first; on failure it rolls back to the safety cp (retained on double-failure). Cross-branch restore throws `Branch mismatch`.
 
 All git-touching hook bodies run through `runRepositoryOperation(state, op)` which serializes onto a FIFO `repositoryTail` promise — the single concurrency-control mechanism.
 

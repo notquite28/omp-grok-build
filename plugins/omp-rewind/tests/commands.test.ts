@@ -276,7 +276,7 @@ async function runTests(): Promise<void> {
         navigations++;
         return { cancelled: false };
       });
-      await registerRewind(state).handler("", context);
+      await registerRewind(state).handler("restore", context);
 
       assertEqual(navigations, 0, "legacy restore does not navigate conversation");
       assertEqual(
@@ -336,7 +336,7 @@ async function runTests(): Promise<void> {
         navigations++;
         return { cancelled: false };
       });
-      await registerRewind(state).handler("", context);
+      await registerRewind(state).handler("restore", context);
 
       assertEqual(await readFile(join(root, "tracked.txt"), "utf-8"), currentBytes, "rollback bytes");
       assertEqual(state.undoCheckpoint?.id, priorUndo.id, "prior undo remains authoritative");
@@ -389,7 +389,7 @@ async function runTests(): Promise<void> {
         "Files only (keep conversation)",
       ], [true]);
 
-      await registerRewind(state).handler("", createContext(root, manager, ui));
+      await registerRewind(state).handler("restore", createContext(root, manager, ui));
 
       assertEqual(
         await readFile(join(root, "tracked.txt"), "utf-8"),
@@ -445,7 +445,7 @@ async function runTests(): Promise<void> {
         navigated.push(id);
         return { cancelled: true };
       });
-      await registerRewind(state).handler("", context);
+      await registerRewind(state).handler("restore", context);
 
       assertEqual(navigated.join(","), "target-leaf", "navigation uses stored leaf ID");
       assertEqual(await readFile(join(root, "tracked.txt"), "utf-8"), bytesBefore, "worktree rolled back");
@@ -476,7 +476,7 @@ async function runTests(): Promise<void> {
       state.undoCheckpoint = undo;
       await writeFile(join(root, "tracked.txt"), "after rewind\n");
       const ui = new FakeUI(["↩ Undo last rewind"], [true]);
-      await registerRewind(state).handler("", createContext(root, manager, ui));
+      await registerRewind(state).handler("restore", createContext(root, manager, ui));
       assertEqual(state.undoCheckpoint, null, "successful undo clears state");
       assert(!(await listCheckpointRefs(root)).includes(undo.id), "successful undo consumes ref");
 
@@ -491,7 +491,7 @@ async function runTests(): Promise<void> {
       state.undoCheckpoint = { ...retryable, worktreeTreeSha: "e".repeat(40) };
       await writeFile(join(root, "tracked.txt"), "retry current\n");
       const failureUi = new FakeUI(["↩ Undo last rewind"], [true]);
-      await registerRewind(state).handler("", createContext(root, manager, failureUi));
+      await registerRewind(state).handler("restore", createContext(root, manager, failureUi));
       assertEqual(state.undoCheckpoint?.id, retryable.id, "failed undo remains available");
       assert((await listCheckpointRefs(root)).includes(retryable.id), "failed undo ref retained");
       assertEqual(
@@ -576,7 +576,7 @@ async function runTests(): Promise<void> {
       assert(refs.includes(newest.id), "newest linked undo recovered");
       assert(!refs.includes(older.id), "older linked undo deleted");
       assert(!refs.includes(unlinked.id), "unlinked current-session ref deleted");
-      await command.handler("", context);
+      await command.handler("restore", context);
       assert(ui.selectionOptions[0]?.includes("↩ Undo last rewind"), "undo action reconstructed");
       assert(
         !ui.selectionOptions[0]?.some((option) => option.includes("BEFORE-MARKER")),
@@ -627,8 +627,27 @@ async function runTests(): Promise<void> {
       const command = registerRewind(state);
       assertEqual(
         command.getArgumentCompletions?.("").map((item) => item.value).join("|"),
-        "diff|diff --full|status|help",
+        "restore|diff|diff --full|status|help",
         "argument completions",
+      );
+
+      const bareUi = new FakeUI();
+      await command.handler("", createContext(root, createSessionManager([], null), bareUi));
+      assert(
+        bareUi.notifications.at(-1)?.message.includes("Use /rewind restore to open the checkpoint browser.") === true,
+        "bare command shows explicit restore migration hint",
+      );
+      assert(
+        bareUi.notifications.at(-1)?.message.includes("/rewind restore") === true,
+        "bare command shows explicit subcommand usage",
+      );
+      assertEqual(bareUi.selectionOptions.length, 0, "bare command does not open checkpoint picker");
+
+      const restoreUi = new FakeUI([undefined]);
+      await command.handler("restore", createContext(root, createSessionManager([], null), restoreUi));
+      assert(
+        restoreUi.selectionOptions[0]?.some((option) => option.includes("diff target")) === true,
+        "restore subcommand opens checkpoint picker",
       );
 
       const before = await captureWorkspaceSnapshot(root);
@@ -772,7 +791,7 @@ async function runTests(): Promise<void> {
         (options) => options.find((option) => option.includes("coverage target")),
         "Files only (keep conversation)",
       ], [false]);
-      await registerRewind(state).handler("", createContext(root, manager, coverageUi));
+      await registerRewind(state).handler("restore", createContext(root, manager, coverageUi));
       assert(
         coverageUi.notifications.some((notice) =>
           notice.message === "Not captured by checkpoint: file target-large.bin"),
@@ -796,7 +815,7 @@ async function runTests(): Promise<void> {
         (options) => options.find((option) => option.includes("preflight invalid")),
         "Files only (keep conversation)",
       ]);
-      await registerRewind(state).handler("", createContext(root, manager, invalidUi, async () => {
+      await registerRewind(state).handler("restore", createContext(root, manager, invalidUi, async () => {
         navigations++;
         return { cancelled: false };
       }));
@@ -821,7 +840,7 @@ async function runTests(): Promise<void> {
         (options) => options.find((option) => option.includes("oldest marker")),
         "Cancel",
       ]);
-      await registerRewind(state).handler("", createContext(root, manager, selectionUi));
+      await registerRewind(state).handler("restore", createContext(root, manager, selectionUi));
       assertEqual(selectionUi.selectionOptions[0]?.length, 51, "undo plus all 50 checkpoints selectable");
       assertEqual(
         selectionUi.selectionOptions[1]?.join("|"),
@@ -857,14 +876,14 @@ async function runTests(): Promise<void> {
         (options) => options.find((option) => option.includes("identity target")),
         "Files only (keep conversation)",
       ], [true]);
-      await registerRewind(state).handler("", createContext(root, manager, restoreUi));
+      await registerRewind(state).handler("restore", createContext(root, manager, restoreUi));
       assertEqual(state.lastWorkspaceIdentity?.worktreeTreeSha, target.worktreeTreeSha, "restore worktree identity");
       assertEqual(state.lastWorkspaceIdentity?.indexTreeSha, target.indexTreeSha, "restore index identity");
 
       const undo = state.undoCheckpoint;
       if (!undo) throw new Error("restore did not create undo checkpoint");
       const undoUi = new FakeUI(["↩ Undo last rewind"], [true]);
-      await registerRewind(state).handler("", createContext(root, manager, undoUi));
+      await registerRewind(state).handler("restore", createContext(root, manager, undoUi));
       assertEqual(state.lastWorkspaceIdentity?.worktreeTreeSha, undo.worktreeTreeSha, "undo worktree identity");
       assertEqual(state.lastWorkspaceIdentity?.indexTreeSha, undo.indexTreeSha, "undo index identity");
 
@@ -876,7 +895,7 @@ async function runTests(): Promise<void> {
         (options) => options.find((option) => option.includes("identity target")),
         "Restore all (files + conversation)",
       ], [true]);
-      await registerRewind(state).handler("", createContext(root, manager, rollbackUi, async () => ({
+      await registerRewind(state).handler("restore", createContext(root, manager, rollbackUi, async () => ({
         cancelled: true,
       })));
       assertEqual(
@@ -946,7 +965,7 @@ async function runTests(): Promise<void> {
         await rm(targetObject, { force: true });
         return true;
       }]);
-      await registerRewind(state).handler("", createContext(root, createSessionManager([], null), ui));
+      await registerRewind(state).handler("restore", createContext(root, createSessionManager([], null), ui));
       assertEqual(state.lastWorkspaceIdentity, null, "double failure clears baseline");
       assert(
         ui.notifications.some((notice) => notice.message.includes("Rollback failed")),

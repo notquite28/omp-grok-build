@@ -908,8 +908,10 @@ export async function handleTreeRestore(
 // ============================================================================
 
 const REWIND_USAGE = [
+  "Use /rewind restore to open the checkpoint browser.",
+  "",
   "Usage:",
-  "  /rewind",
+  "  /rewind restore",
   "  /rewind diff",
   "  /rewind diff --full",
   "  /rewind status",
@@ -921,6 +923,7 @@ export function registerCommands(pi: ExtensionAPI, state: RewindState): void {
     description: "Rewind file changes and/or conversation to a checkpoint",
     getArgumentCompletions: (argumentPrefix: string) => {
       const completions = [
+        { value: "restore", label: "restore", description: "Open checkpoint browser" },
         { value: "diff", label: "diff", description: "Inspect restore effects" },
         { value: "diff --full", label: "diff --full", description: "Inspect every affected path" },
         { value: "status", label: "status", description: "Report checkpoint health" },
@@ -931,7 +934,7 @@ export function registerCommands(pi: ExtensionAPI, state: RewindState): void {
     },
     handler: async (args, ctx) => {
       const command = args.trim().split(/\s+/).filter(Boolean).join(" ");
-      if (command === "") {
+      if (command === "restore") {
         await runRewindFlow(state, ctx);
       } else if (command === "diff") {
         await runDiffFlow(state, ctx, false);

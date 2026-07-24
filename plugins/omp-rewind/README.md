@@ -10,7 +10,7 @@ Shipped from the multi-plugin marketplace as **`omp-rewind@omp-ext`** (sibling o
 
 ## Features
 
-- Dedicated `/rewind` command — checkpoint browser → diff preview → restore modes
+- `/rewind restore` — checkpoint browser → diff preview → restore modes
 - Session tree / branch integration — pick an earlier message, optionally restore files
 - Smart checkpointing — snapshots after write/edit/bash/ast_edit/eval, 1 per turn
 - Smart dedup — skips checkpoints when worktree unchanged
@@ -68,12 +68,12 @@ Full marketplace lifecycle (add/remove catalog, scopes, discover): see the [repo
 
 | Goal | How |
 | --- | --- |
-| Git checkpoint browser (diff + restore modes) | **`/rewind`** |
+| Git checkpoint browser (diff + restore modes) | **`/rewind restore`** |
 | Jump conversation to an earlier message | **`/tree`** or **Esc+Esc** (host, default) |
 | Optional file restore after tree/branch pick | Prompt: *Keep current files* / *Restore files to that point* |
 | Branch from a user message | **`/branch`** (same file-restore prompt when applicable) |
 
-Esc+Esc is owned by OMP (`doubleEscapeAction`, default `"tree"`). This extension does **not** capture double-Esc, so the session tree stays available. Git-only restore is always **`/rewind`**.
+Esc+Esc is owned by OMP (`doubleEscapeAction`, default `"tree"`). This extension does **not** capture double-Esc, so the session tree stays available. Git-only restore uses **`/rewind restore`**.
 
 ```yaml
 # ~/.omp/agent/config.yml — host double-Esc (default is already tree)
@@ -126,7 +126,7 @@ Use a disposable Git repository because the extension creates refs under `refs/p
 1. Launch the linked profile and run `/rewind help`; the usage text confirms command registration.
 2. Run `/rewind status`; a healthy session reports its checkpoint refs instead of sending the text to the model.
 3. Ask OMP to modify a tracked file and wait for the turn to finish.
-4. Confirm the footer shows `◆ N checkpoints`, then run `/rewind`.
+4. Confirm the footer shows `◆ N checkpoints`, then run `/rewind restore`.
 5. Select the latest pre-change checkpoint and restore files only.
 6. Confirm the file and index match the selected checkpoint while `HEAD` and the branch tip remain unchanged.
 
