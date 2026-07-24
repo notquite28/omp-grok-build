@@ -3,6 +3,7 @@ import { loginToGrok, refreshGrokCredentials, resolveGrokVersion } from "./auth"
 import { requestHeaders } from "./headers";
 import { registerUsageCommand } from "./usage";
 import { registerImagineCommand } from "./imagine";
+import { registerVideoCommand } from "./video";
 import { GROK_CLI_MODELS } from "./models";
 import { sanitizeProxyPayload } from "./payload";
 
@@ -52,4 +53,5 @@ export default function grokBuildExtension(pi: ExtensionAPI): void {
 
   registerUsageCommand(pi);
   registerImagineCommand(pi);
+  registerVideoCommand(pi);
 }

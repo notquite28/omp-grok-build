@@ -96,7 +96,7 @@ describe("generateImage", () => {
     else process.env.GROK_BUILD_IMAGINE_MODEL = originalModel;
   });
 
-  test("posts to api.x.ai with original model defaults and returns b64", async () => {
+  test("posts to the CLI proxy with original model defaults and returns b64", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       calls.push({ url: String(input), init });
@@ -113,7 +113,7 @@ describe("generateImage", () => {
 
     expect(result).toEqual({ b64: JPEG_B64, mimeType: "image/jpeg" });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://api.x.ai/v1/images/generations");
+    expect(calls[0]?.url).toBe("https://cli-chat-proxy.grok.com/v1/images/generations");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       model: "grok-imagine-image-quality",
       prompt: "a cat",

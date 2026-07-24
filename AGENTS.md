@@ -22,15 +22,17 @@ The root `package.json` is **workspace-scripts only — NOT an installable exten
 
 ### omp-grok-build — provider plugin
 
-Entry point `src/main.ts` default-exports `grokBuildExtension(pi)` and registers exactly: one provider, one request hook, one usage command, one imagine command, and one tool.
+Entry point `src/main.ts` default-exports `grokBuildExtension(pi)` and registers exactly: one provider, one request hook, one usage command, one imagine command, one video command, and two tools.
 
 ```text
 main.ts (PROVIDER_ID="grok-build", BASE_URL, API_ID="openai-responses")
   ├─ pi.registerProvider("grok-build")   baseUrl=BASE_URL, oauth{login,refreshToken,getApiKey}
   ├─ pi.on("before_provider_request")    → sanitizeProxyPayload (gated on baseUrl===BASE_URL)
   ├─ registerUsageCommand("grok-build-usage")        → GET /v1/billing (proxy host)
-  └─ registerImagineCommand("grok-build-imagine")
-       └─ registerImageGenTool("image_gen")          → POST api.x.ai/v1/images/generations
+  ├─ registerImagineCommand("grok-build-imagine")
+  │    └─ registerImageGenTool("image_gen")          → POST proxy/v1/images/generations
+  └─ registerVideoCommand("grok-build-imagine-video")
+       └─ registerVideoGenTool("video_gen")          → POST proxy/v1/videos/generations + GET poll
 ```
 
 **Load-bearing base-URL split (do not change):**
@@ -38,10 +40,11 @@ main.ts (PROVIDER_ID="grok-build", BASE_URL, API_ID="openai-responses")
 | Concern | Host | Source |
 |---|---|---|
 | Chat / models / billing | `https://cli-chat-proxy.grok.com/v1` | `main.ts:10` `BASE_URL`; `usage.ts:5` `BILLING_URL` |
-| Image generation (Imagine) | `https://api.x.ai/v1/images/generations` | `imagine/generate.ts:4` `DEFAULT_IMAGINE_BASE_URL` — the **only** `api.x.ai` caller |
+| Image generation (Imagine) | `https://cli-chat-proxy.grok.com/v1/images/generations` | `imagine/generate.ts:4` `DEFAULT_IMAGINE_BASE_URL` |
+| Video generation (Imagine) | `https://cli-chat-proxy.grok.com/v1/videos/generations` | `video/generate.ts:4` `DEFAULT_VIDEO_BASE_URL` |
 | OAuth (device code + refresh) | `https://auth.x.ai` | `auth.ts:4` `DEFAULT_ISSUER` |
 
-`before_provider_request` **hard-throws** if the request's `baseUrl !== BASE_URL`, so chat/billing can never leak to `api.x.ai`. Never switch chat/billing to public `api.x.ai`.
+All generation traffic (chat, image, video, billing) routes through the CLI entitlement proxy. `before_provider_request` **hard-throws** if the request's `baseUrl !== BASE_URL`, so chat can never leak elsewhere. Never switch any concern to public `api.x.ai`.
 
 Request lifecycle: headers are attached **statically** to each model spec at registration time (`requestHeaders(modelId, version)`), so plan-mode subagents keep routing headers after extension APIs unload. At request time, `sanitizeProxyPayload` mutates the payload — strips reasoning from history, maps effort `minimal→low`, drops `reasoning.encrypted_content`, replaces `prompt_cache_retention` with `prompt_cache_key=sessionId`.
 
@@ -152,7 +155,8 @@ omp plugin upgrade
 | `plugins/omp-grok-build/src/payload.ts` | `sanitizeProxyPayload` — request mutation |
 | `plugins/omp-grok-build/src/models.ts` | Static `GROK_CLI_MODELS` (must align with `grok models` / `~/.grok/models_cache.json`) |
 | `plugins/omp-grok-build/src/usage.ts` | Billing fetch + ASCII bar renderer; command `grok-build-usage` |
-| `plugins/omp-grok-build/src/imagine/*` | `generate.ts` (api.x.ai caller), `tool.ts` (`image_gen`), `workflow.ts`, `save.ts`, `parseArgs.ts`, `aspect.ts` |
+| `plugins/omp-grok-build/src/imagine/*` | `generate.ts` (proxy image caller), `tool.ts` (`image_gen`), `workflow.ts`, `save.ts`, `parseArgs.ts`, `aspect.ts` |
+| `plugins/omp-grok-build/src/video/*` | `generate.ts` (proxy video submit + poll), `tool.ts` (`video_gen`), `workflow.ts`, `save.ts` (download), `parseArgs.ts`, `index.ts` (command) |
 | `plugins/omp-rewind/src/core.ts` | Pure git core — checkpoint CRUD, restore, prune, compare |
 | `plugins/omp-rewind/src/index.ts` | Host wiring — session/turn/tool hooks |
 | `plugins/omp-rewind/src/commands.ts` | `/rewind` flow, transactional restore, ancestry resolution |
@@ -166,7 +170,7 @@ omp plugin upgrade
 - **Package manager: Bun.** Grok has its own `bun.lock`; rewind has no runtime/dev deps needing a lockfile (only `@oh-my-pi/pi-coding-agent` peer/dev).
 - **TypeScript:** grok `tsconfig.json` — `strict:true`, `target/module ESNext`, `moduleResolution Bundler`, `noEmit`, `types:[bun-types]`. Rewind has **no tsconfig**.
 - **No lint/format config** in this tree (no biome/prettier/eslint). All such hits live under `references/` (vendored upstream, not shipped). Type safety comes from grok's `tsc --noEmit` only.
-- **Env vars:** `GROK_HOME`, `GROK_CLI_VERSION`, `GROK_BUILD_IMAGINE_BASE_URL`, `GROK_BUILD_IMAGINE_MODEL`.
+- **Env vars:** `GROK_HOME`, `GROK_CLI_VERSION`, `GROK_BUILD_IMAGINE_BASE_URL`, `GROK_BUILD_IMAGINE_MODEL`, `GROK_BUILD_VIDEO_BASE_URL`, `GROK_BUILD_VIDEO_MODEL`.
 
 ## Testing & QA
 
@@ -190,7 +194,7 @@ Rewind uses `bun` only as the TS runtime, not as a test harness — there is no 
 
 **Contracts every suite defends:**
 
-- Grok chat/billing routes **only** to `cli-chat-proxy.grok.com/v1`, never `api.x.ai` (except Imagine's image generation).
+- Grok chat/image/video/billing routes **only** to `cli-chat-proxy.grok.com/v1`, never `api.x.ai`.
 - Grok auth/usage errors **never** echo bearer tokens or `error_description`.
 - `sanitizeProxyPayload` normalizes reasoning (`minimal→low`), strips reasoning history/encrypted includes, sets `prompt_cache_key`.
 - Rewind restore **preserves HEAD + branch tip** while reverting worktree/index trees; cross-branch restore throws `Branch mismatch`.
@@ -210,6 +214,6 @@ Rewind uses `bun` only as the TS runtime, not as a test harness — there is no 
 
 - Do not merge the two plugins into one `package.json` / one `omp.extensions` entry.
 - Do not set catalog `source` back to `"./"` (legacy single-plugin root layout).
-- Do not route grok chat/billing to public `api.x.ai` — only Imagine may call `api.x.ai/v1/images/generations`.
+- Do not route any grok traffic to public `api.x.ai` — all generation (chat, image, video, billing) goes through `cli-chat-proxy.grok.com`.
 - Do not introduce `@oh-my-pi/*` imports into `plugins/omp-rewind/src/core.ts`.
 - Do not vendor either plugin into `oh-my-pi` itself; `references/` is read-only upstream reference, not shipped.

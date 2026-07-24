@@ -1,9 +1,9 @@
 {
   "name": "omp-grok-build",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Use a Grok Build CLI subscription from Oh My Pi",
+  "description": "Use a Grok Build CLI subscription from Oh My Pi (chat, Imagine image/video)",
   "omp": {
     "extensions": [
       "./src/main.ts"

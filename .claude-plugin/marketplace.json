@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "OMP extension marketplace: Grok Build provider and git rewind",
-    "version": "0.2.2"
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "omp-grok-build",
-      "version": "0.1.8",
-      "description": "Grok Build CLI models via cli-chat-proxy, usage bars, and Grok Imagine (/grok-build-imagine, image_gen)",
+      "version": "0.2.0",
+      "description": "Grok Build CLI models via cli-chat-proxy, usage bars, and Grok Imagine (image/video tools)",
       "category": "development",
       "tags": [
         "grok",
@@ -20,7 +20,8 @@
         "provider",
         "oauth",
         "imagine",
-        "image"
+        "image",
+        "video"
       ],
       "source": "./plugins/omp-grok-build"
     },

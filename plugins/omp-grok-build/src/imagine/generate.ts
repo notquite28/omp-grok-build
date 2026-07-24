@@ -1,7 +1,7 @@
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import type { AspectRatio } from "./aspect";
 
-const DEFAULT_IMAGINE_BASE_URL = "https://api.x.ai/v1";
+const DEFAULT_IMAGINE_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const DEFAULT_IMAGINE_MODEL = "grok-imagine-image-quality";
 const MAX_RETRIES = 3;
 const REQUEST_TIMEOUT_MS = 60_000;
