@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import type {
@@ -9,7 +9,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 import rewindExtension from "../src/index.js";
 import {
-  handleForkRestore,
+  handleBranchRestore,
   resolveCheckpointAtOrBefore,
   registerCommands,
 } from "../src/commands.js";
@@ -17,6 +17,7 @@ import {
   createCheckpoint,
   git,
   listCheckpointRefs,
+  captureWorkspaceSnapshot,
   type CheckpointData,
 } from "../src/core.js";
 import {
@@ -96,14 +97,15 @@ function createSessionManager(
 }
 
 type Selection = string | ((options: string[]) => string | undefined) | undefined;
+type Confirmation = boolean | (() => boolean | Promise<boolean>);
 
 class FakeUI {
   readonly selections: Selection[];
-  readonly confirms: boolean[];
+  readonly confirms: Confirmation[];
   readonly selectionOptions: string[][] = [];
   readonly notifications: Array<{ message: string; level: string }> = [];
 
-  constructor(selections: Selection[] = [], confirms: boolean[] = []) {
+  constructor(selections: Selection[] = [], confirms: Confirmation[] = []) {
     this.selections = [...selections];
     this.confirms = [...confirms];
   }
@@ -120,7 +122,8 @@ class FakeUI {
   }
 
   async confirm(_title: string, _message: string): Promise<boolean> {
-    return this.confirms.shift() ?? true;
+    const response = this.confirms.shift();
+    return typeof response === "function" ? response() : response ?? true;
   }
 
   notify(message: string, level: string): void {
@@ -148,9 +151,13 @@ function createContext(
   // The command only consumes this tested subset of ExtensionCommandContext.
   return context as unknown as ExtensionCommandContext;
 }
-
 interface RegisteredCommand {
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
+  getArgumentCompletions?: (argumentPrefix: string) => Array<{
+    value: string;
+    label: string;
+    description?: string;
+  }> | null;
 }
 
 function registerRewind(state: RewindState): RegisteredCommand {
@@ -215,7 +222,7 @@ async function runTests(): Promise<void> {
       state.checkpoints.set("user-only", checkpointStub("user-only", "a-user", 30));
       const ui = new FakeUI(["Conversation only (keep files)"]);
       const context = createContext(root, manager, ui);
-      await handleForkRestore(state, { entryId: "a-user" }, context);
+      await handleBranchRestore(state, { entryId: "a-user" }, context);
       assert(
         !ui.selectionOptions[0]?.includes("Restore all (files + conversation)"),
         "normal user branch resolves against parent and excludes user-leaf checkpoint",
@@ -231,7 +238,7 @@ async function runTests(): Promise<void> {
         trigger: "resume",
       };
       const rootUserUi = new FakeUI(["Conversation only (keep files)"]);
-      await handleForkRestore(
+      await handleBranchRestore(
         rootUserState,
         { entryId: "first-user" },
         createContext(root, rootUserManager, rootUserUi),
@@ -574,6 +581,376 @@ async function runTests(): Promise<void> {
       assert(
         !ui.selectionOptions[0]?.some((option) => option.includes("BEFORE-MARKER")),
         "before-restore refs excluded from picker",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  await test("diff and full reports are read-only in restore direction", async () => {
+    const root = await createTempRepo();
+    try {
+      await writeFile(join(root, "restore create.txt"), "target create\n");
+      await writeFile(join(root, "modify.txt"), "target modify\n");
+      await writeFile(join(root, "staged only.txt"), "target staged\n");
+      await git('add "restore create.txt" modify.txt "staged only.txt"', root);
+      const target = await createCheckpoint({
+        root,
+        id: "diff-target",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 1,
+        description: "diff target",
+      });
+
+      await rm(join(root, "restore create.txt"));
+      await writeFile(join(root, "modify.txt"), "current modify\n");
+      await writeFile(join(root, "current only.txt"), "current only\n");
+      await writeFile(join(root, "staged only.txt"), "current staged\n");
+      await git('add --all -- "restore create.txt" modify.txt "current only.txt" "staged only.txt"', root);
+      await writeFile(join(root, "staged only.txt"), "target staged\n");
+      for (let index = 0; index < 41; index++) {
+        await writeFile(join(root, `overflow ${String(index).padStart(2, "0")}.txt`), "current\n");
+      }
+
+      const state = readyState(root);
+      state.checkpoints.set(target.id, target);
+      const undo = await createCheckpoint({
+        root,
+        id: "diff-undo",
+        sessionId: "command-session",
+        trigger: "before-restore",
+        turnIndex: 0,
+        restoreTargetId: target.id,
+      });
+      state.undoCheckpoint = undo;
+      const command = registerRewind(state);
+      assertEqual(
+        command.getArgumentCompletions?.("").map((item) => item.value).join("|"),
+        "diff|diff --full|status|help",
+        "argument completions",
+      );
+
+      const before = await captureWorkspaceSnapshot(root);
+      const refsBefore = (await listCheckpointRefs(root)).join("|");
+      const headBefore = await git("rev-parse HEAD", root);
+      const branchBefore = await git("symbolic-ref -q HEAD", root);
+      const tipBefore = await git(`rev-parse ${branchBefore}`, root);
+      let navigations = 0;
+      const manager = createSessionManager([], null);
+      const cancelledUi = new FakeUI([undefined]);
+      await command.handler("diff", createContext(root, manager, cancelledUi, async () => {
+        navigations++;
+        return { cancelled: false };
+      }));
+
+      const defaultUi = new FakeUI([(options) => options.find((option) => option.includes("diff target"))]);
+      await command.handler("diff", createContext(root, manager, defaultUi));
+      const report = defaultUi.notifications.at(-1)?.message ?? "";
+      assert(report.includes("Worktree restore effects"), "worktree section");
+      assert(report.includes("Index restore effects"), "index section");
+      assert(report.includes("A restore create.txt"), "restore creates target-only path");
+      assert(report.includes("M modify.txt"), "restore modifies tracked path");
+      assert(report.includes("D current only.txt"), "restore deletes current-only path");
+      assert(report.includes("use /rewind diff --full"), "default report capped");
+
+      const fullUi = new FakeUI([(options) => options.find((option) => option.includes("diff target"))]);
+      await command.handler("diff --full", createContext(root, manager, fullUi));
+      const fullReport = fullUi.notifications.at(-1)?.message ?? "";
+      assert(!fullReport.includes("more path(s)"), "full report is uncapped");
+      assert(fullReport.includes("D overflow 40.txt"), "full report includes final path");
+      assert(fullReport.includes("M staged only.txt"), "index-only path classified");
+
+      const after = await captureWorkspaceSnapshot(root);
+      assertEqual(after.worktreeTreeSha, before.worktreeTreeSha, "diff leaves worktree unchanged");
+      assertEqual(after.indexTreeSha, before.indexTreeSha, "diff leaves index unchanged");
+      assertEqual((await listCheckpointRefs(root)).join("|"), refsBefore, "diff leaves refs unchanged");
+      assertEqual(await git("rev-parse HEAD", root), headBefore, "diff leaves HEAD unchanged");
+      assertEqual(await git(`rev-parse ${branchBefore}`, root), tipBefore, "diff leaves branch tip unchanged");
+      assertEqual(state.undoCheckpoint?.id, undo.id, "diff leaves undo unchanged");
+      assertEqual(navigations, 0, "diff never navigates");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  await test("status reports healthy and invalid checkpoint health without mutation", async () => {
+    const root = await createTempRepo();
+    try {
+      const state = readyState(root);
+      const healthy = await createCheckpoint({
+        root,
+        id: "status-healthy",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 1,
+      });
+      state.checkpoints.set(healthy.id, healthy);
+      const command = registerRewind(state);
+      const manager = createSessionManager([], null);
+      const healthyUi = new FakeUI();
+      await command.handler("status", createContext(root, manager, healthyUi));
+      assertEqual(healthyUi.notifications.at(-1)?.level, "info", "healthy status level");
+      assert(healthyUi.notifications.at(-1)?.message.includes("0 invalid") === true, "healthy count");
+
+      const snapshot = await captureWorkspaceSnapshot(root);
+      const incomplete = await createCheckpoint({
+        root,
+        id: "status-incomplete",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 2,
+        snapshot: { ...snapshot, skippedLargeFiles: ["target-large.bin"] },
+      });
+      state.checkpoints.set(incomplete.id, incomplete);
+      const undo = await createCheckpoint({
+        root,
+        id: "status-undo",
+        sessionId: "command-session",
+        trigger: "before-restore",
+        turnIndex: 0,
+        restoreTargetId: healthy.id,
+      });
+      state.undoCheckpoint = undo;
+      await git("update-ref refs/pi-checkpoints/status-malformed HEAD", root);
+      const tree = await git("rev-parse HEAD^{tree}", root);
+      const head = await git("rev-parse HEAD", root);
+      const missingId = "status-missing-tree";
+      const missingCommit = await git(`commit-tree ${tree}`, root, {
+        input: [
+          `pi-rewind:${missingId}`,
+          "sessionId command-session",
+          "trigger turn",
+          "turn 3",
+          `head ${head}`,
+          `index-tree ${tree}`,
+          `worktree-tree ${"c".repeat(40)}`,
+        ].join("\n"),
+      });
+      await git(`update-ref refs/pi-checkpoints/${missingId} ${missingCommit}`, root);
+
+      const refsBefore = (await listCheckpointRefs(root)).join("|");
+      const before = await captureWorkspaceSnapshot(root);
+      const statusUi = new FakeUI();
+      await command.handler("status", createContext(root, manager, statusUi));
+      const notice = statusUi.notifications.at(-1);
+      assertEqual(notice?.level, "warning", "unhealthy status level");
+      assert(notice?.message.includes("Durable undo: available") === true, "undo status");
+      assert(notice?.message.includes("Incomplete coverage checkpoints: 1") === true, "coverage status");
+      assert(notice?.message.includes("status-malformed: invalid checkpoint metadata") === true, "malformed status");
+      assert(
+        notice?.message.includes(`status-missing-tree: missing worktree tree ${"c".repeat(40)}`) === true,
+        "missing tree status",
+      );
+      const after = await captureWorkspaceSnapshot(root);
+      assertEqual(after.worktreeTreeSha, before.worktreeTreeSha, "status leaves worktree unchanged");
+      assertEqual(after.indexTreeSha, before.indexTreeSha, "status leaves index unchanged");
+      assertEqual((await listCheckpointRefs(root)).join("|"), refsBefore, "status leaves refs unchanged");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  await test("restore preflight discloses target coverage and exposes all 50 checkpoints", async () => {
+    const root = await createTempRepo();
+    try {
+      const manager = createSessionManager([], null);
+      const snapshot = await captureWorkspaceSnapshot(root);
+      const target = await createCheckpoint({
+        root,
+        id: "coverage-target",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 1,
+        description: "coverage target",
+        snapshot: { ...snapshot, skippedLargeFiles: ["target-large.bin"] },
+      });
+      const state = readyState(root);
+      state.checkpoints.set(target.id, target);
+      await writeFile(join(root, "tracked.txt"), "dirty\n");
+      const coverageUi = new FakeUI([
+        (options) => options.find((option) => option.includes("coverage target")),
+        "Files only (keep conversation)",
+      ], [false]);
+      await registerRewind(state).handler("", createContext(root, manager, coverageUi));
+      assert(
+        coverageUi.notifications.some((notice) =>
+          notice.message === "Not captured by checkpoint: file target-large.bin"),
+        "target-only skipped coverage disclosed",
+      );
+
+      const invalid = await createCheckpoint({
+        root,
+        id: "preflight-invalid",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 2,
+        description: "preflight invalid",
+      });
+      state.checkpoints.clear();
+      state.checkpoints.set(invalid.id, invalid);
+      await git(`update-ref refs/pi-checkpoints/${invalid.id} HEAD`, root);
+      const refsBefore = await listCheckpointRefs(root);
+      let navigations = 0;
+      const invalidUi = new FakeUI([
+        (options) => options.find((option) => option.includes("preflight invalid")),
+        "Files only (keep conversation)",
+      ]);
+      await registerRewind(state).handler("", createContext(root, manager, invalidUi, async () => {
+        navigations++;
+        return { cancelled: false };
+      }));
+      assert(
+        invalidUi.notifications.some((notice) =>
+          notice.message === "Checkpoint unavailable: invalid checkpoint metadata"),
+        "invalid preflight reason",
+      );
+      assertEqual((await listCheckpointRefs(root)).join("|"), refsBefore.join("|"), "no safety ref created");
+      assertEqual(navigations, 0, "invalid target never navigates");
+
+      state.checkpoints.clear();
+      for (let index = 0; index < 50; index++) {
+        const checkpoint = checkpointStub(`retained-${index}`, "leaf", index + 1);
+        checkpoint.description = index === 0 ? "oldest marker" : `checkpoint ${index}`;
+        if (index === 0) checkpoint.conversationLeafId = undefined;
+        state.checkpoints.set(checkpoint.id, checkpoint);
+      }
+      state.undoCheckpoint = checkpointStub("selection-undo", "leaf", 100);
+      state.undoCheckpoint.trigger = "before-restore";
+      const selectionUi = new FakeUI([
+        (options) => options.find((option) => option.includes("oldest marker")),
+        "Cancel",
+      ]);
+      await registerRewind(state).handler("", createContext(root, manager, selectionUi));
+      assertEqual(selectionUi.selectionOptions[0]?.length, 51, "undo plus all 50 checkpoints selectable");
+      assertEqual(
+        selectionUi.selectionOptions[1]?.join("|"),
+        "Files only (keep conversation)|Cancel",
+        "oldest selection maps correctly despite undo item",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  await test("restore undo and navigation rollback synchronize workspace identity", async () => {
+    const root = await createTempRepo();
+    try {
+      const manager = createSessionManager([
+        { id: "identity-leaf", parentId: null, type: "message", timestamp: "2026-01-01", message: { role: "assistant" } },
+      ], "identity-leaf");
+      const state = readyState(root);
+      await writeFile(join(root, "tracked.txt"), "target\n");
+      const target = await createCheckpoint({
+        root,
+        id: "identity-target",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 1,
+        description: "identity target",
+        conversationLeafId: "identity-leaf",
+        conversationLeafParentId: null,
+      });
+      state.checkpoints.set(target.id, target);
+      await writeFile(join(root, "tracked.txt"), "current\n");
+      const restoreUi = new FakeUI([
+        (options) => options.find((option) => option.includes("identity target")),
+        "Files only (keep conversation)",
+      ], [true]);
+      await registerRewind(state).handler("", createContext(root, manager, restoreUi));
+      assertEqual(state.lastWorkspaceIdentity?.worktreeTreeSha, target.worktreeTreeSha, "restore worktree identity");
+      assertEqual(state.lastWorkspaceIdentity?.indexTreeSha, target.indexTreeSha, "restore index identity");
+
+      const undo = state.undoCheckpoint;
+      if (!undo) throw new Error("restore did not create undo checkpoint");
+      const undoUi = new FakeUI(["↩ Undo last rewind"], [true]);
+      await registerRewind(state).handler("", createContext(root, manager, undoUi));
+      assertEqual(state.lastWorkspaceIdentity?.worktreeTreeSha, undo.worktreeTreeSha, "undo worktree identity");
+      assertEqual(state.lastWorkspaceIdentity?.indexTreeSha, undo.indexTreeSha, "undo index identity");
+
+      await writeFile(join(root, "tracked.txt"), "rollback current\n");
+      await git("add tracked.txt", root);
+      await writeFile(join(root, "tracked.txt"), "rollback worktree\n");
+      const beforeRollback = await captureWorkspaceSnapshot(root);
+      const rollbackUi = new FakeUI([
+        (options) => options.find((option) => option.includes("identity target")),
+        "Restore all (files + conversation)",
+      ], [true]);
+      await registerRewind(state).handler("", createContext(root, manager, rollbackUi, async () => ({
+        cancelled: true,
+      })));
+      assertEqual(
+        state.lastWorkspaceIdentity?.worktreeTreeSha,
+        beforeRollback.worktreeTreeSha,
+        "navigation rollback worktree identity",
+      );
+      assertEqual(
+        state.lastWorkspaceIdentity?.indexTreeSha,
+        beforeRollback.indexTreeSha,
+        "navigation rollback index identity",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  await test("double restore failure clears uncertain workspace identity", async () => {
+    const root = await createTempRepo();
+    try {
+      await writeFile(join(root, "target-only.txt"), "target\n");
+      const target = await createCheckpoint({
+        root,
+        id: "double-failure-target",
+        sessionId: "command-session",
+        trigger: "turn",
+        turnIndex: 1,
+        description: "double failure target",
+      });
+      await rm(join(root, "target-only.txt"));
+      await writeFile(join(root, "current-only.txt"), "current\n");
+      const state = readyState(root);
+      state.checkpoints.set(target.id, target);
+      state.lastWorkspaceIdentity = {
+        worktreeTreeSha: target.worktreeTreeSha,
+        indexTreeSha: target.indexTreeSha,
+      };
+
+      const hookPath = join(root, ".git", "hooks", "reference-transaction");
+      await writeFile(hookPath, [
+        "#!/bin/sh",
+        '[ "$1" = "prepared" ] || exit 0',
+        "while read old new ref; do",
+        "  case \"$ref\" in",
+        "    refs/pi-checkpoints/before-restore-*)",
+        "      tree=$(git cat-file -p \"$new\" | sed -n '1s/^tree //p')",
+        "      dir=$(printf '%s' \"$tree\" | cut -c1-2)",
+        "      file=$(printf '%s' \"$tree\" | cut -c3-)",
+        "      rm -f \".git/objects/$dir/$file\"",
+        "      ;;",
+        "  esac",
+        "done",
+        "exit 0",
+      ].join("\n"));
+      await chmod(hookPath, 0o755);
+      const targetObject = join(
+        root,
+        ".git",
+        "objects",
+        target.worktreeTreeSha.slice(0, 2),
+        target.worktreeTreeSha.slice(2),
+      );
+      const ui = new FakeUI([
+        (options) => options.find((option) => option.includes("double failure target")),
+        "Files only (keep conversation)",
+      ], [async () => {
+        await rm(targetObject, { force: true });
+        return true;
+      }]);
+      await registerRewind(state).handler("", createContext(root, createSessionManager([], null), ui));
+      assertEqual(state.lastWorkspaceIdentity, null, "double failure clears baseline");
+      assert(
+        ui.notifications.some((notice) => notice.message.includes("Rollback failed")),
+        "double failure reported",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

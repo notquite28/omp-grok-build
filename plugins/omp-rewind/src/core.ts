@@ -354,7 +354,7 @@ async function getFilesToAdd(root: string): Promise<FilesToAddResult> {
   };
 }
 
-interface WorkspaceState {
+export interface WorkspaceSnapshot {
   headSha: string;
   branch: string;
   indexTreeSha: string;
@@ -364,7 +364,22 @@ interface WorkspaceState {
   skippedLargeDirs: string[];
 }
 
-async function captureWorkspaceState(root: string): Promise<WorkspaceState> {
+export interface WorkspaceIdentity {
+  worktreeTreeSha: string;
+  indexTreeSha: string;
+}
+
+export function sameWorkspaceIdentity(
+  a: WorkspaceIdentity | null,
+  b: WorkspaceIdentity | null,
+): boolean {
+  return a !== null
+    && b !== null
+    && a.worktreeTreeSha === b.worktreeTreeSha
+    && a.indexTreeSha === b.indexTreeSha;
+}
+
+export async function captureWorkspaceSnapshot(root: string): Promise<WorkspaceSnapshot> {
   const headSha = await git("rev-parse HEAD", root).catch(() => ZEROS);
   const branch = await git("rev-parse --abbrev-ref HEAD", root).catch(() => "unknown");
   const indexTreeSha = await git("write-tree", root);
@@ -428,6 +443,7 @@ export interface CreateCheckpointOpts {
   conversationLeafId?: string;
   conversationLeafParentId?: string | null;
   restoreTargetId?: string;
+  snapshot?: WorkspaceSnapshot;
 }
 
 /**
@@ -446,10 +462,11 @@ export async function createCheckpoint(opts: CreateCheckpointOpts): Promise<Chec
     conversationLeafId,
     conversationLeafParentId,
     restoreTargetId,
+    snapshot,
   } = opts;
   const timestamp = Date.now();
   const iso = new Date(timestamp).toISOString();
-  const workspace = await captureWorkspaceState(root);
+  const workspace = snapshot ?? await captureWorkspaceSnapshot(root);
 
   const msg = [
     `pi-rewind:${id}`,
@@ -555,11 +572,22 @@ export interface WorkspaceComparison {
   skippedLargeDirs: string[];
 }
 
+export interface TreeChange {
+  status: "A" | "M" | "D";
+  path: string;
+}
+
+export interface CheckpointDiff {
+  comparison: WorkspaceComparison;
+  worktreeChanges: TreeChange[];
+  indexChanges: TreeChange[];
+}
+
 export async function compareCheckpointToCurrent(
   root: string,
   checkpoint: CheckpointData,
 ): Promise<WorkspaceComparison> {
-  const current = await captureWorkspaceState(root);
+  const current = await captureWorkspaceSnapshot(root);
   const worktreeChanged = current.worktreeTreeSha !== checkpoint.worktreeTreeSha;
   const indexChanged = current.indexTreeSha !== checkpoint.indexTreeSha;
   const maxStatLength = 2000;
@@ -582,6 +610,51 @@ export async function compareCheckpointToCurrent(
     skippedLargeFiles: current.skippedLargeFiles,
     skippedLargeDirs: current.skippedLargeDirs,
   };
+}
+
+export async function listTreeChanges(
+  root: string,
+  fromTree: string,
+  toTree: string,
+): Promise<TreeChange[]> {
+  const output = await git(
+    `diff-tree --no-commit-id -r --no-renames --name-status -z ${fromTree} ${toTree}`,
+    root,
+  );
+  if (!output) return [];
+
+  const fields = output.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const changes: TreeChange[] = [];
+  for (let index = 0; index < fields.length; index += 2) {
+    const rawStatus = fields[index];
+    const path = fields[index + 1];
+    if (!rawStatus || path === undefined) {
+      throw new Error("Unsupported tree diff status malformed");
+    }
+    const status = rawStatus === "T" ? "M" : rawStatus;
+    if (status !== "A" && status !== "M" && status !== "D") {
+      throw new Error(`Unsupported tree diff status ${rawStatus}`);
+    }
+    changes.push({ status, path });
+  }
+  return changes;
+}
+
+export async function buildCheckpointDiff(
+  root: string,
+  checkpoint: CheckpointData,
+): Promise<CheckpointDiff> {
+  const comparison = await compareCheckpointToCurrent(root, checkpoint);
+  const [worktreeChanges, indexChanges] = await Promise.all([
+    comparison.worktreeChanged
+      ? listTreeChanges(root, comparison.currentWorktreeTreeSha, checkpoint.worktreeTreeSha)
+      : Promise.resolve([]),
+    comparison.indexChanged
+      ? listTreeChanges(root, comparison.currentIndexTreeSha, checkpoint.indexTreeSha)
+      : Promise.resolve([]),
+  ]);
+  return { comparison, worktreeChanges, indexChanges };
 }
 
 async function safeClean(
@@ -620,59 +693,96 @@ async function safeClean(
 // Load / list checkpoints
 // ============================================================================
 
+export interface CheckpointInspection {
+  id: string;
+  checkpoint: CheckpointData | null;
+  errors: string[];
+}
+
+function parseCheckpointMetadata(refName: string, msg: string): CheckpointData | null {
+  const get = (key: string) =>
+    msg.match(new RegExp(`^${key} (.+)$`, "m"))?.[1]?.trim();
+
+  const sid = get("sessionId");
+  const turn = get("turn");
+  const head = get("head");
+  const idx = get("index-tree");
+  const wt = get("worktree-tree");
+  if (!sid || !turn || !head || !idx || !wt) return null;
+
+  const parseJson = (key: string): string[] | undefined => {
+    const raw = get(key);
+    if (!raw) return undefined;
+    try {
+      const arr = JSON.parse(raw);
+      return arr.length > 0 ? arr : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const conversationLeafParent = get("conversation-leaf-parent");
+
+  return {
+    id: refName,
+    sessionId: sid,
+    trigger: (get("trigger") as CheckpointData["trigger"]) || "turn",
+    turnIndex: parseInt(turn, 10),
+    toolName: get("toolName"),
+    description: get("description"),
+    conversationLeafId: get("conversation-leaf"),
+    conversationLeafParentId: conversationLeafParent === undefined
+      ? undefined
+      : conversationLeafParent === "null" ? null : conversationLeafParent,
+    restoreTargetId: get("restore-target"),
+    branch: get("branch") || "unknown",
+    headSha: head,
+    indexTreeSha: idx,
+    worktreeTreeSha: wt,
+    timestamp: get("created") ? new Date(get("created")!).getTime() : 0,
+    preexistingUntrackedFiles: parseJson("untracked"),
+    skippedLargeFiles: parseJson("largeFiles"),
+    skippedLargeDirs: parseJson("largeDirs"),
+  };
+}
+
+export async function inspectCheckpointRef(
+  root: string,
+  id: string,
+): Promise<CheckpointInspection> {
+  let checkpoint: CheckpointData | null = null;
+  try {
+    const commitSha = await git(`rev-parse --verify ${REF_BASE}/${id}`, root);
+    const msg = await git(`cat-file commit ${commitSha}`, root);
+    checkpoint = parseCheckpointMetadata(id, msg);
+  } catch {
+    checkpoint = null;
+  }
+
+  if (!checkpoint) {
+    return { id, checkpoint: null, errors: ["invalid checkpoint metadata"] };
+  }
+
+  const errors: string[] = [];
+  await git(`cat-file -e "${checkpoint.indexTreeSha}^{tree}"`, root).catch(() => {
+    errors.push(`missing index tree ${checkpoint!.indexTreeSha}`);
+  });
+  await git(`cat-file -e "${checkpoint.worktreeTreeSha}^{tree}"`, root).catch(() => {
+    errors.push(`missing worktree tree ${checkpoint!.worktreeTreeSha}`);
+  });
+  return { id, checkpoint: errors.length === 0 ? checkpoint : null, errors };
+}
+
+export async function inspectAllCheckpointRefs(root: string): Promise<CheckpointInspection[]> {
+  const refs = await listCheckpointRefs(root);
+  return Promise.all(refs.map((id) => inspectCheckpointRef(root, id)));
+}
+
 /** Load checkpoint metadata from a git ref */
 export async function loadCheckpointFromRef(
   root: string,
   refName: string,
 ): Promise<CheckpointData | null> {
-  try {
-    const commitSha = await git(`rev-parse --verify ${REF_BASE}/${refName}`, root);
-    const msg = await git(`cat-file commit ${commitSha}`, root);
-
-    const get = (key: string) =>
-      msg.match(new RegExp(`^${key} (.+)$`, "m"))?.[1]?.trim();
-
-    const sid = get("sessionId");
-    const turn = get("turn");
-    const head = get("head");
-    const idx = get("index-tree");
-    const wt = get("worktree-tree");
-    if (!sid || !turn || !head || !idx || !wt) return null;
-
-    const parseJson = (key: string): string[] | undefined => {
-      const raw = get(key);
-      if (!raw) return undefined;
-      try {
-        const arr = JSON.parse(raw);
-        return arr.length > 0 ? arr : undefined;
-      } catch { return undefined; }
-    };
-    const conversationLeafParent = get("conversation-leaf-parent");
-
-    return {
-      id: refName,
-      sessionId: sid,
-      trigger: (get("trigger") as CheckpointData["trigger"]) || "turn",
-      turnIndex: parseInt(turn, 10),
-      toolName: get("toolName"),
-      description: get("description"),
-      conversationLeafId: get("conversation-leaf"),
-      conversationLeafParentId: conversationLeafParent === undefined
-        ? undefined
-        : conversationLeafParent === "null" ? null : conversationLeafParent,
-      restoreTargetId: get("restore-target"),
-      branch: get("branch") || "unknown",
-      headSha: head,
-      indexTreeSha: idx,
-      worktreeTreeSha: wt,
-      timestamp: get("created") ? new Date(get("created")!).getTime() : 0,
-      preexistingUntrackedFiles: parseJson("untracked"),
-      skippedLargeFiles: parseJson("largeFiles"),
-      skippedLargeDirs: parseJson("largeDirs"),
-    };
-  } catch {
-    return null;
-  }
+  return (await inspectCheckpointRef(root, refName)).checkpoint;
 }
 
 /** List all checkpoint ref names under REF_BASE */

@@ -4,7 +4,7 @@
  * Mutable state shared between index.ts, commands.ts, and ui.ts.
  */
 
-import type { CheckpointData } from "./core.js";
+import type { CheckpointData, WorkspaceIdentity } from "./core.js";
 
 export interface RewindState {
   /** Is the cwd a git repo? */
@@ -19,8 +19,6 @@ export interface RewindState {
   resumeCheckpoint: CheckpointData | null;
   /** Singular durable checkpoint used by Undo last rewind */
   undoCheckpoint: CheckpointData | null;
-  /** True if checkpoint creation failed (stop retrying) */
-  failed: boolean;
   /** FIFO tail for every repository operation */
   repositoryTail: Promise<void>;
   /** Nesting guard for tree navigation initiated by this plugin */
@@ -33,10 +31,8 @@ export interface RewindState {
   pendingToolInfo: Map<string, string>;
   /** Tool descriptions accumulated during the current turn */
   turnToolDescriptions: string[];
-  /** Whether the current turn had any mutating tool calls */
-  turnHadMutations: boolean;
-  /** Last worktree tree SHA (to detect actual file changes) */
-  lastWorktreeTree: string | null;
+  /** Exact worktree and index identity retained by the latest checkpoint or restore */
+  lastWorkspaceIdentity: WorkspaceIdentity | null;
 }
 
 export function createInitialState(): RewindState {
@@ -47,15 +43,13 @@ export function createInitialState(): RewindState {
     checkpoints: new Map(),
     resumeCheckpoint: null,
     undoCheckpoint: null,
-    failed: false,
     repositoryTail: Promise.resolve(),
     suppressNavigationRestore: 0,
     currentTurnIndex: 0,
     currentPrompt: "",
     pendingToolInfo: new Map(),
     turnToolDescriptions: [],
-    turnHadMutations: false,
-    lastWorktreeTree: null,
+    lastWorkspaceIdentity: null,
   };
 }
 
@@ -66,14 +60,12 @@ export function resetState(state: RewindState): void {
   state.checkpoints.clear();
   state.resumeCheckpoint = null;
   state.undoCheckpoint = null;
-  state.failed = false;
   state.currentTurnIndex = 0;
   state.suppressNavigationRestore = 0;
   state.currentPrompt = "";
   state.pendingToolInfo.clear();
   state.turnToolDescriptions = [];
-  state.turnHadMutations = false;
-  state.lastWorktreeTree = null;
+  state.lastWorkspaceIdentity = null;
 }
 
 export function runRepositoryOperation<T>(

@@ -27,6 +27,11 @@ import {
   isSafeId,
   MUTATING_TOOLS,
   MAX_UNTRACKED_FILE_SIZE,
+  captureWorkspaceSnapshot,
+  sameWorkspaceIdentity,
+  buildCheckpointDiff,
+  inspectCheckpointRef,
+  inspectAllCheckpointRefs,
   type CreateCheckpointOpts,
   type CheckpointData,
 } from "../src/core.js";
@@ -395,6 +400,129 @@ async function runTests() {
       );
     } finally {
       await cleanupRepo(comparisonRepo);
+    }
+  });
+
+  await test("composite identity and supplied snapshots preserve exact trees", async () => {
+    const identityRepo = await createTempRepo();
+    try {
+      const snapshot = await captureWorkspaceSnapshot(identityRepo);
+      assert(
+        sameWorkspaceIdentity(snapshot, {
+          worktreeTreeSha: snapshot.worktreeTreeSha,
+          indexTreeSha: snapshot.indexTreeSha,
+        }),
+        "matching worktree and index identities",
+      );
+      assert(
+        !sameWorkspaceIdentity(snapshot, {
+          worktreeTreeSha: snapshot.worktreeTreeSha,
+          indexTreeSha: "f".repeat(40),
+        }),
+        "index SHA participates in identity",
+      );
+
+      await writeFile(join(identityRepo, "after-snapshot.txt"), "later\n");
+      const checkpoint = await createCheckpoint(makeOpts(identityRepo, {
+        id: "supplied-snapshot",
+        snapshot,
+      }));
+      assertEqual(checkpoint.worktreeTreeSha, snapshot.worktreeTreeSha, "supplied worktree tree");
+      assertEqual(checkpoint.indexTreeSha, snapshot.indexTreeSha, "supplied index tree");
+      assert(
+        checkpoint.preexistingUntrackedFiles?.includes("after-snapshot.txt") !== true,
+        "checkpoint uses supplied coverage metadata verbatim",
+      );
+    } finally {
+      await cleanupRepo(identityRepo);
+    }
+  });
+
+  await test("structured restore diff is NUL-safe and reports A M D direction", async () => {
+    const diffRepo = await createTempRepo();
+    try {
+      await writeFile(join(diffRepo, "create me.txt"), "target create\n");
+      await writeFile(join(diffRepo, "modify me.txt"), "target modify\n");
+      await git('add "create me.txt" "modify me.txt"', diffRepo);
+      const checkpoint = await createCheckpoint(makeOpts(diffRepo, { id: "structured-diff" }));
+
+      await rm(join(diffRepo, "create me.txt"));
+      await writeFile(join(diffRepo, "modify me.txt"), "current modify\n");
+      await writeFile(join(diffRepo, "remove me.txt"), "current only\n");
+      await git('add --all -- "create me.txt" "modify me.txt" "remove me.txt"', diffRepo);
+      const diff = await buildCheckpointDiff(diffRepo, checkpoint);
+      const worktree = diff.worktreeChanges.map((change) => `${change.status}:${change.path}`).join("|");
+      const index = diff.indexChanges.map((change) => `${change.status}:${change.path}`).join("|");
+      assert(worktree.includes("A:create me.txt"), "restore creates target-only path");
+      assert(worktree.includes("M:modify me.txt"), "restore replaces modified path");
+      assert(worktree.includes("D:remove me.txt"), "restore removes current-only path");
+      assert(index.includes("A:create me.txt"), "index restore creates target-only path");
+      assert(index.includes("M:modify me.txt"), "index restore replaces modified path");
+      assert(index.includes("D:remove me.txt"), "index restore removes current-only path");
+    } finally {
+      await cleanupRepo(diffRepo);
+    }
+  });
+
+  await test("checkpoint inspection reports legacy validity and stable failures", async () => {
+    const inspectRepo = await createTempRepo();
+    try {
+      const legacy = await createCheckpoint(makeOpts(inspectRepo, { id: "inspect-legacy" }));
+      const valid = await inspectCheckpointRef(inspectRepo, legacy.id);
+      assertEqual(valid.errors.length, 0, "legacy checkpoint remains valid");
+      assertEqual(valid.checkpoint?.conversationLeafId, undefined, "legacy conversation ID optional");
+
+      await git(`update-ref refs/pi-checkpoints/inspect-malformed HEAD`, inspectRepo);
+      const malformed = await inspectCheckpointRef(inspectRepo, "inspect-malformed");
+      assertEqual(malformed.errors[0], "invalid checkpoint metadata", "malformed reason");
+
+      const tree = await git("rev-parse HEAD^{tree}", inspectRepo);
+      const head = await git("rev-parse HEAD", inspectRepo);
+      const missingIndexId = "inspect-missing-index";
+      const missingIndexCommit = await git(`commit-tree ${tree}`, inspectRepo, {
+        input: [
+          `pi-rewind:${missingIndexId}`,
+          "sessionId inspect-session",
+          "trigger turn",
+          "turn 1",
+          `head ${head}`,
+          `index-tree ${"e".repeat(40)}`,
+          `worktree-tree ${tree}`,
+        ].join("\n"),
+      });
+      await git(`update-ref refs/pi-checkpoints/${missingIndexId} ${missingIndexCommit}`, inspectRepo);
+      const missingIndex = await inspectCheckpointRef(inspectRepo, missingIndexId);
+      assertEqual(
+        missingIndex.errors[0],
+        `missing index tree ${"e".repeat(40)}`,
+        "missing index reason",
+      );
+
+      const missingWorktreeId = "inspect-missing-worktree";
+      const missingWorktreeCommit = await git(`commit-tree ${tree}`, inspectRepo, {
+        input: [
+          `pi-rewind:${missingWorktreeId}`,
+          "sessionId inspect-session",
+          "trigger turn",
+          "turn 1",
+          `head ${head}`,
+          `index-tree ${tree}`,
+          `worktree-tree ${"d".repeat(40)}`,
+        ].join("\n"),
+      });
+      await git(`update-ref refs/pi-checkpoints/${missingWorktreeId} ${missingWorktreeCommit}`, inspectRepo);
+      const missingWorktree = await inspectCheckpointRef(inspectRepo, missingWorktreeId);
+      assertEqual(
+        missingWorktree.errors[0],
+        `missing worktree tree ${"d".repeat(40)}`,
+        "missing worktree reason",
+      );
+
+      const all = await inspectAllCheckpointRefs(inspectRepo);
+      assert(all.some((inspection) => inspection.id === legacy.id && inspection.checkpoint !== null), "valid ref listed");
+      assert(all.some((inspection) => inspection.id === missingIndexId && inspection.checkpoint === null), "invalid ref listed");
+    } finally {
+      await cleanupRepo(inspectRepo);
     }
   });
   // ------ Tool checkpoints ------

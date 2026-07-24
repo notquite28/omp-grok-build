@@ -26,10 +26,12 @@ import {
   pruneOldSessions,
   MUTATING_TOOLS,
   DEFAULT_MAX_CHECKPOINTS,
+  captureWorkspaceSnapshot,
+  sameWorkspaceIdentity,
 } from "./core.js";
 import { createInitialState, resetState, runRepositoryOperation } from "./state.js";
 import { updateStatus, clearStatus } from "./ui.js";
-import { registerCommands, handleForkRestore, handleTreeRestore } from "./commands.js";
+import { registerCommands, handleBranchRestore, handleTreeRestore } from "./commands.js";
 
 /** Truncate a string to maxLen, adding ellipsis if needed */
 function truncate(s: string, maxLen: number): string {
@@ -143,7 +145,10 @@ export default function (pi: ExtensionAPI) {
         });
         state.resumeCheckpoint = cp;
         state.checkpoints.set(cp.id, cp);
-        state.lastWorktreeTree = cp.worktreeTreeSha;
+        state.lastWorkspaceIdentity = {
+          worktreeTreeSha: cp.worktreeTreeSha,
+          indexTreeSha: cp.indexTreeSha,
+        };
       } catch {
         // Resume checkpoint is optional.
       }
@@ -193,7 +198,6 @@ export default function (pi: ExtensionAPI) {
     state.currentPrompt = truncate(String(event.prompt || ""), 60);
     // Reset tool list for this new turn
     state.turnToolDescriptions = [];
-    state.turnHadMutations = false;
   });
 
   // ========================================================================
@@ -222,7 +226,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_end", async (event, _ctx) => {
     if (!MUTATING_TOOLS.has(event.toolName)) return;
 
-    state.turnHadMutations = true;
 
     // Get the description captured from tool_call
     const toolDesc = state.pendingToolInfo.get(event.toolCallId)
@@ -237,7 +240,7 @@ export default function (pi: ExtensionAPI) {
   // ========================================================================
 
   pi.on("turn_end", async (_event, ctx) => {
-    if (!state.gitAvailable || state.failed) return;
+    if (!state.gitAvailable) return;
     if (!state.repoRoot || !state.sessionId) return;
 
     const leafId = ctx.sessionManager.getLeafId();
@@ -245,7 +248,6 @@ export default function (pi: ExtensionAPI) {
     const root = state.repoRoot;
     const sessionId = state.sessionId;
     const turnIndex = state.currentTurnIndex;
-    const hadMutations = state.turnHadMutations;
     const promptLabel = state.currentPrompt ? `"${state.currentPrompt}"` : "";
     const toolsLabel = state.turnToolDescriptions.join(", ");
     const description = promptLabel && toolsLabel
@@ -259,7 +261,14 @@ export default function (pi: ExtensionAPI) {
           || state.repoRoot !== root
           || state.sessionId !== sessionId
         ) return;
-        if (hadMutations) {
+        const snapshot = await captureWorkspaceSnapshot(root);
+        if (
+          !state.gitAvailable
+          || state.repoRoot !== root
+          || state.sessionId !== sessionId
+        ) return;
+
+        if (!sameWorkspaceIdentity(snapshot, state.lastWorkspaceIdentity)) {
           const timestamp = Date.now();
           const cp = await createCheckpoint({
             root,
@@ -270,20 +279,19 @@ export default function (pi: ExtensionAPI) {
             description,
             conversationLeafId: leafEntry?.id,
             conversationLeafParentId: leafEntry?.parentId,
+            snapshot,
           });
-
 
           if (
             !state.gitAvailable
             || state.repoRoot !== root
             || state.sessionId !== sessionId
           ) return;
-          if (state.lastWorktreeTree && cp.worktreeTreeSha === state.lastWorktreeTree) {
-            await deleteCheckpoint(root, cp.id);
-          } else {
-            state.checkpoints.set(cp.id, cp);
-            state.lastWorktreeTree = cp.worktreeTreeSha;
-          }
+          state.checkpoints.set(cp.id, cp);
+          state.lastWorkspaceIdentity = {
+            worktreeTreeSha: cp.worktreeTreeSha,
+            indexTreeSha: cp.indexTreeSha,
+          };
         }
 
         try {
@@ -331,7 +339,6 @@ export default function (pi: ExtensionAPI) {
     } finally {
       if (state.repoRoot === root && state.sessionId === sessionId) {
         state.turnToolDescriptions = [];
-        state.turnHadMutations = false;
       }
     }
   });
@@ -342,7 +349,7 @@ export default function (pi: ExtensionAPI) {
 
   // OMP uses session_before_branch (Pi renamed it to session_before_fork).
   pi.on("session_before_branch", async (event, ctx) => {
-    return handleForkRestore(state, event, ctx);
+    return handleBranchRestore(state, event, ctx);
   });
 
   pi.on("session_before_tree", async (event, ctx) => {

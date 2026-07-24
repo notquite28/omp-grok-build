@@ -29,6 +29,6 @@
     "@oh-my-pi/pi-coding-agent": "^16"
   },
   "scripts": {
-    "test": "bun tests/core.test.ts && bun tests/commands.test.ts"
+    "test": "bun tests/core.test.ts && bun tests/commands.test.ts && bun tests/index.test.ts"
   }
 }
