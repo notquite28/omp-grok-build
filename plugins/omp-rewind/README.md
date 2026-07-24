@@ -49,21 +49,18 @@ omp plugin enable omp-rewind@omp-ext
 # uninstall marketplace install
 omp plugin uninstall omp-rewind@omp-ext
 
-# local link while developing this monorepo
-omp install ./plugins/omp-rewind --force
-# absolute
-omp install /path/to/omp-ext/plugins/omp-rewind --force
-# remove a linked install
-omp plugin uninstall omp-rewind
+# local development from the omp-ext repository root
+# replace <profile> with the profile used to run OMP
+omp --profile <profile> plugin disable omp-rewind@omp-ext
+omp --profile <profile> plugin link --force ./plugins/omp-rewind
+omp --profile <profile>
 
-# one-shot session load (no install)
-omp --extension ./plugins/omp-rewind
-omp -e ./plugins/omp-rewind
+# restore the marketplace copy after testing
+omp --profile <profile> plugin uninstall omp-rewind
+omp --profile <profile> plugin install --force omp-rewind@omp-ext
 ```
 
-With profile alias `grk` (`omp --profile grok-build --alias grk`), use the same commands via `grk …`.
-
-Lower-level aliases: `omp plugin link <path>`, `omp plugin install <path>`. Prefer `omp install`.
+Inside the development session, run `/rewind help` to verify the local extension loaded. Restart OMP after source changes. Avoid combining `--no-extensions` with `--extension`: OMP 17.1.2 suppresses the explicit extension along with discovered extensions.
 
 Full marketplace lifecycle (add/remove catalog, scopes, discover): see the [repo root README](../../README.md#install--uninstall).
 
@@ -100,15 +97,38 @@ Checkpoint refs stay under `refs/pi-checkpoints/` so existing pi-rewind checkpoi
 
 ## Development
 
-```bash
-# Run tests
-bun run test
-# or
-npm test
+From the repository root, link the checkout into the profile you use for testing:
 
-# Load without install
-omp -e ./omp-rewind
+```bash
+omp --profile <profile> plugin disable omp-rewind@omp-ext
+omp --profile <profile> plugin link --force ./plugins/omp-rewind
+omp --profile <profile>
 ```
+
+Run `/rewind help` inside OMP to confirm the development copy loaded. To switch back, uninstall the local package name and force-install the marketplace ID:
+
+```bash
+omp --profile <profile> plugin uninstall omp-rewind
+omp --profile <profile> plugin install --force omp-rewind@omp-ext
+```
+
+Run the plugin tests from its directory:
+
+```bash
+cd plugins/omp-rewind
+bun run test
+```
+
+### Manual smoke test
+
+Use a disposable Git repository because the extension creates refs under `refs/pi-checkpoints/*` and restores real index/worktree state.
+
+1. Launch the linked profile and run `/rewind help`; the usage text confirms command registration.
+2. Run `/rewind status`; a healthy session reports its checkpoint refs instead of sending the text to the model.
+3. Ask OMP to modify a tracked file and wait for the turn to finish.
+4. Confirm the footer shows `◆ N checkpoints`, then run `/rewind`.
+5. Select the latest pre-change checkpoint and restore files only.
+6. Confirm the file and index match the selected checkpoint while `HEAD` and the branch tip remain unchanged.
 
 ## Lineage
 

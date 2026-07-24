@@ -6,7 +6,7 @@
  * Run: bun tests/core.test.ts
  */
 
-import { chmod, mkdtemp, rm, writeFile, mkdir, readFile, stat } from "fs/promises";
+import { chmod, mkdtemp, rm, writeFile, mkdir, readFile, stat, symlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -421,6 +421,10 @@ async function runTests() {
         }),
         "index SHA participates in identity",
       );
+      assert(
+        !sameWorkspaceIdentity(null, snapshot),
+        "missing workspace identity never matches",
+      );
 
       await writeFile(join(identityRepo, "after-snapshot.txt"), "later\n");
       const checkpoint = await createCheckpoint(makeOpts(identityRepo, {
@@ -443,22 +447,27 @@ async function runTests() {
     try {
       await writeFile(join(diffRepo, "create me.txt"), "target create\n");
       await writeFile(join(diffRepo, "modify me.txt"), "target modify\n");
-      await git('add "create me.txt" "modify me.txt"', diffRepo);
+      await writeFile(join(diffRepo, "type change.txt"), "target regular file\n");
+      await git('add "create me.txt" "modify me.txt" "type change.txt"', diffRepo);
       const checkpoint = await createCheckpoint(makeOpts(diffRepo, { id: "structured-diff" }));
 
       await rm(join(diffRepo, "create me.txt"));
       await writeFile(join(diffRepo, "modify me.txt"), "current modify\n");
       await writeFile(join(diffRepo, "remove me.txt"), "current only\n");
-      await git('add --all -- "create me.txt" "modify me.txt" "remove me.txt"', diffRepo);
+      await rm(join(diffRepo, "type change.txt"));
+      await symlink("README.md", join(diffRepo, "type change.txt"));
+      await git('add --all -- "create me.txt" "modify me.txt" "remove me.txt" "type change.txt"', diffRepo);
       const diff = await buildCheckpointDiff(diffRepo, checkpoint);
       const worktree = diff.worktreeChanges.map((change) => `${change.status}:${change.path}`).join("|");
       const index = diff.indexChanges.map((change) => `${change.status}:${change.path}`).join("|");
       assert(worktree.includes("A:create me.txt"), "restore creates target-only path");
       assert(worktree.includes("M:modify me.txt"), "restore replaces modified path");
       assert(worktree.includes("D:remove me.txt"), "restore removes current-only path");
+      assert(worktree.includes("M:type change.txt"), "worktree typechange maps to modification");
       assert(index.includes("A:create me.txt"), "index restore creates target-only path");
       assert(index.includes("M:modify me.txt"), "index restore replaces modified path");
       assert(index.includes("D:remove me.txt"), "index restore removes current-only path");
+      assert(index.includes("M:type change.txt"), "index typechange maps to modification");
     } finally {
       await cleanupRepo(diffRepo);
     }
@@ -475,6 +484,8 @@ async function runTests() {
       await git(`update-ref refs/pi-checkpoints/inspect-malformed HEAD`, inspectRepo);
       const malformed = await inspectCheckpointRef(inspectRepo, "inspect-malformed");
       assertEqual(malformed.errors[0], "invalid checkpoint metadata", "malformed reason");
+      const unsafe = await inspectCheckpointRef(inspectRepo, "bad/id");
+      assertEqual(unsafe.errors[0], "invalid checkpoint metadata", "unsafe ID rejected");
 
       const tree = await git("rev-parse HEAD^{tree}", inspectRepo);
       const head = await git("rev-parse HEAD", inspectRepo);
@@ -497,6 +508,8 @@ async function runTests() {
         `missing index tree ${"e".repeat(40)}`,
         "missing index reason",
       );
+      const loadableMissingIndex = await loadCheckpointFromRef(inspectRepo, missingIndexId);
+      assertEqual(loadableMissingIndex?.sessionId, "inspect-session", "damaged tree metadata loads");
 
       const missingWorktreeId = "inspect-missing-worktree";
       const missingWorktreeCommit = await git(`commit-tree ${tree}`, inspectRepo, {
@@ -521,6 +534,11 @@ async function runTests() {
       const all = await inspectAllCheckpointRefs(inspectRepo);
       assert(all.some((inspection) => inspection.id === legacy.id && inspection.checkpoint !== null), "valid ref listed");
       assert(all.some((inspection) => inspection.id === missingIndexId && inspection.checkpoint === null), "invalid ref listed");
+      const prunedCorrupt = await pruneCheckpoints(inspectRepo, "inspect-session", 0);
+      assertEqual(prunedCorrupt, 2, "parseable corrupt refs are pruned");
+      const remainingRefs = await listCheckpointRefs(inspectRepo);
+      assert(!remainingRefs.includes(missingIndexId), "missing-index ref removed");
+      assert(!remainingRefs.includes(missingWorktreeId), "missing-worktree ref removed");
     } finally {
       await cleanupRepo(inspectRepo);
     }

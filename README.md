@@ -4,8 +4,8 @@ Oh My Pi marketplace containing **two separate plugins**:
 
 | Plugin | What it does |
 | --- | --- |
-| [`omp-grok-build`](./plugins/omp-grok-build) | Grok Build CLI provider (`grok-build/*`), OAuth, `/grok-build-usage`, `/grok-build-imagine` + `image_gen` |
-| [`omp-rewind`](./plugins/omp-rewind) | Git worktree checkpoints — `/rewind`, Esc+Esc, safe restore, redo stack |
+| [`omp-grok-build`](./plugins/omp-grok-build) | Grok Build CLI provider (`grok-build/*`), OAuth, usage, and Grok Imagine image/video commands and tools |
+| [`omp-rewind`](./plugins/omp-rewind) | Git worktree checkpoints — `/rewind`, session tree/branch restore integration, transactional restore, durable undo |
 
 Repo layout:
 
@@ -106,21 +106,25 @@ There is no top-level `omp remove`; use `omp plugin uninstall`.
 
 ### 6. Local development (link)
 
+Use an explicit profile so the development link and marketplace install are changed in the same OMP profile. If the marketplace plugin is already installed, disable it before linking the checkout to avoid loading two copies.
+
 ```bash
-# symlink a checkout into the plugin set (watches for changes)
-omp install ./plugins/omp-grok-build --force
-omp install ./plugins/omp-rewind --force
-
-# equivalent
-omp plugin link ./plugins/omp-rewind
-omp plugin install ./plugins/omp-rewind --force
-
-# one-shot session load without installing
-omp --extension ./plugins/omp-rewind
-omp -e ./plugins/omp-rewind
+# Run from the omp-ext repository root. Replace <profile> with your OMP profile.
+omp --profile <profile> plugin disable omp-rewind@omp-ext
+omp --profile <profile> plugin link --force ./plugins/omp-rewind
+omp --profile <profile>
 ```
 
-Unlink/remove local installs with `omp plugin uninstall omp-rewind` (or `omp-grok-build`).
+Verify the linked extension inside OMP with `/rewind help`. Restart OMP after source changes.
+
+Restore the marketplace installation when local testing is complete:
+
+```bash
+omp --profile <profile> plugin uninstall omp-rewind
+omp --profile <profile> plugin install --force omp-rewind@omp-ext
+```
+
+Use the same flow with `omp-grok-build`. Do not combine `--no-extensions` with `--extension` for this workflow: OMP 17.1.2 suppresses the explicit extension along with discovered extensions.
 
 ### Quick reference
 
@@ -136,11 +140,11 @@ Unlink/remove local installs with `omp plugin uninstall omp-rewind` (or `omp-gro
 | Upgrade plugin(s) | `omp plugin upgrade [name@omp-ext]` |
 | Disable / enable | `omp plugin disable\|enable name@omp-ext` |
 | Uninstall plugin | `omp plugin uninstall name@omp-ext` |
-| Link local path | `omp install ./plugins/<name> --force` |
+| Link local path | `omp --profile <profile> plugin link --force ./plugins/<name>` |
 
 ## Local development
 
-Link plugins with `omp install ./plugins/<name> --force` (see [Install / uninstall](#install--uninstall) above).
+Link plugins with `omp --profile <profile> plugin link --force ./plugins/<name>` (see [Install / uninstall](#install--uninstall) above).
 
 Tests:
 
@@ -151,7 +155,7 @@ bun run typecheck
 bun test
 
 # Rewind plugin (no deps)
-cd plugins/omp-rewind && bun tests/core.test.ts
+cd plugins/omp-rewind && bun run test
 ```
 
 From repo root (after `bun install` in the Grok plugin dir):
@@ -168,15 +172,7 @@ bun run test:rewind
 
 ### Note on extension loading
 
-Both plugins are TypeScript **extension factories** (`package.json` → `omp.extensions`). Prefer marketplace install for update tracking. If a host build does not load factories from the marketplace cache, fall back to:
-
-```bash
-omp install ./plugins/omp-rewind --force
-# or
-omp install github:notquite28/omp-ext
-```
-
-and open an issue — marketplace install is the intended path for this catalog.
+Both plugins are TypeScript **extension factories** (`package.json` → `omp.extensions`). Prefer marketplace install for update tracking. For local development, use `omp plugin link` as documented above; do not use a simultaneous marketplace install and direct extension load.
 
 ## Releases
 

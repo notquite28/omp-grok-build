@@ -10,9 +10,9 @@
  *   - Label: user prompt + list of mutating tools that ran
  *   - No per-tool or per-turn-start checkpoints (noisy, redundant)
  *
- * Usage:
- *   omp -e ./omp-rewind
- *   omp install ./omp-rewind
+ * Local development from the omp-ext repository root:
+ *   omp --profile <profile> plugin disable omp-rewind@omp-ext
+ *   omp --profile <profile> plugin link --force ./plugins/omp-rewind
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { CheckpointData } from "./core.js";

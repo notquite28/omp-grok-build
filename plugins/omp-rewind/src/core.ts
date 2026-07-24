@@ -630,11 +630,11 @@ export async function listTreeChanges(
     const rawStatus = fields[index];
     const path = fields[index + 1];
     if (!rawStatus || path === undefined) {
-      throw new Error("Unsupported tree diff status malformed");
+      throw new Error("Tree diff: unsupported status malformed");
     }
     const status = rawStatus === "T" ? "M" : rawStatus;
     if (status !== "A" && status !== "M" && status !== "D") {
-      throw new Error(`Unsupported tree diff status ${rawStatus}`);
+      throw new Error(`Tree diff: unsupported status ${rawStatus}`);
     }
     changes.push({ status, path });
   }
@@ -745,18 +745,25 @@ function parseCheckpointMetadata(refName: string, msg: string): CheckpointData |
   };
 }
 
+async function loadCheckpointMetadataFromRef(
+  root: string,
+  id: string,
+): Promise<CheckpointData | null> {
+  if (!isSafeId(id)) return null;
+  try {
+    const commitSha = await git(`rev-parse --verify ${REF_BASE}/${id}`, root);
+    const msg = await git(`cat-file commit ${commitSha}`, root);
+    return parseCheckpointMetadata(id, msg);
+  } catch {
+    return null;
+  }
+}
+
 export async function inspectCheckpointRef(
   root: string,
   id: string,
 ): Promise<CheckpointInspection> {
-  let checkpoint: CheckpointData | null = null;
-  try {
-    const commitSha = await git(`rev-parse --verify ${REF_BASE}/${id}`, root);
-    const msg = await git(`cat-file commit ${commitSha}`, root);
-    checkpoint = parseCheckpointMetadata(id, msg);
-  } catch {
-    checkpoint = null;
-  }
+  const checkpoint = await loadCheckpointMetadataFromRef(root, id);
 
   if (!checkpoint) {
     return { id, checkpoint: null, errors: ["invalid checkpoint metadata"] };
@@ -782,7 +789,7 @@ export async function loadCheckpointFromRef(
   root: string,
   refName: string,
 ): Promise<CheckpointData | null> {
-  return (await inspectCheckpointRef(root, refName)).checkpoint;
+  return loadCheckpointMetadataFromRef(root, refName);
 }
 
 /** List all checkpoint ref names under REF_BASE */

@@ -2,18 +2,21 @@
 
 Use a **Grok Build CLI subscription** from [Oh My Pi](https://omp.sh) via the Grok CLI entitlement proxy.
 
-This extension registers OMP provider `grok-build`, reuses the official Grok CLI login when available, supports native device-code OAuth, discovers the live Grok CLI model catalog, and adds:
+This extension registers OMP provider `grok-build`, reuses the official Grok CLI login when available, supports native device-code OAuth, and ships a static model catalog with the routing headers required by the CLI proxy. It adds:
 
 - `/grok-build-usage` — subscription quota with Codex-style bars
 - `/grok-build-imagine` — Grok Imagine image generation
 - `image_gen` — model-callable tool for the same path
+- `/grok-build-imagine-video` — Grok Imagine video generation
+- `video_gen` — model-callable video generation tool
 
-Chat inference and billing stay on the CLI entitlement proxy. Image generation uses the public xAI images API with the same Grok Build OAuth token (same split as upstream [pi-grok-cli](https://github.com/kenryu42/pi-grok-cli)).
+Chat, billing, image generation, and video generation all use the Grok CLI entitlement proxy. OAuth device-code and refresh requests use `auth.x.ai`; generation traffic must never use the public `api.x.ai` host.
 
 ```text
-Inference / models / billing: https://cli-chat-proxy.grok.com/v1
-OAuth only:                   https://auth.x.ai
-Imagine (images API):         https://api.x.ai/v1
+Chat / models / billing: https://cli-chat-proxy.grok.com/v1
+Imagine images:          https://cli-chat-proxy.grok.com/v1/images/generations
+Imagine videos:          https://cli-chat-proxy.grok.com/v1/videos/generations
+OAuth only:              https://auth.x.ai
 ```
 
 This package lives under the multi-plugin marketplace repo. Catalog entry:
@@ -45,11 +48,18 @@ omp plugin enable omp-grok-build@omp-ext
 # uninstall marketplace install
 omp plugin uninstall omp-grok-build@omp-ext
 
-# local link while developing this monorepo
-omp install ./plugins/omp-grok-build --force
-# remove a linked install
-omp plugin uninstall omp-grok-build
+# local development from the omp-ext repository root
+# replace <profile> with the profile used to run OMP
+omp --profile <profile> plugin disable omp-grok-build@omp-ext
+omp --profile <profile> plugin link --force ./plugins/omp-grok-build
+omp --profile <profile>
+
+# restore the marketplace copy after testing
+omp --profile <profile> plugin uninstall omp-grok-build
+omp --profile <profile> plugin install --force omp-grok-build@omp-ext
 ```
+
+Restart OMP after source changes. Avoid combining `--no-extensions` with `--extension`: OMP 17.1.2 suppresses the explicit extension along with discovered extensions.
 
 With profile alias `grk` (`omp --profile grok-build --alias grk`):
 
@@ -90,6 +100,7 @@ Keep `GROK_CLI_MODELS` aligned with the chat models served by Grok Build.
 | --- | --- |
 | `/grok-build-usage` | Show monthly/weekly subscription quota with bars and relative reset times |
 | `/grok-build-imagine <prompt>` | Generate a JPEG. Supports `--aspect`, `--out`, `--resolution 1k` |
+| `/grok-build-imagine-video <prompt>` | Generate an MP4. Supports duration, resolution, aspect ratio, source image, and output path |
 
 ### Usage (`/grok-build-usage`)
 
@@ -136,7 +147,7 @@ Behavior:
 | Step | OMP API / path |
 | --- | --- |
 | Auth | `modelRegistry.getApiKeyForProvider("grok-build")`, then CLI credential fallback |
-| Generate | `POST https://api.x.ai/v1/images/generations` (model `grok-imagine-image-quality`) |
+| Generate | `POST https://cli-chat-proxy.grok.com/v1/images/generations` (model `grok-imagine-image-quality`) |
 | Save | `<sessionDir>/<sessionId>/images/N.jpg` when the session is on disk; otherwise tmp fallback |
 | Display | `pi.sendUserMessage([{ type: "image", … }, { type: "text", path… }])` so user and model both see it |
 
@@ -148,6 +159,14 @@ auto, 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 2:1, 1:2,
 ```
 
 Only `--resolution 1k` is accepted (API default).
+
+### Video (`/grok-build-imagine-video`, `video_gen`)
+
+```text
+/grok-build-imagine-video <prompt> [--duration 6|10] [--resolution 480p|720p|1080p] [--aspect <ratio>] [--image <url>] [--out <path>]
+```
+
+The command and `video_gen` tool submit to the entitlement proxy, poll the returned request until completion, download the MP4, and save it in session storage or a temporary fallback. Supported video aspect ratios are `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, and `2:3`.
 
 ### Tool (`image_gen`)
 
@@ -164,9 +183,11 @@ Returns a JSON text payload with absolute path, relative path, and filename. Sam
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GROK_BUILD_IMAGINE_BASE_URL` | `https://api.x.ai/v1` | Imagine API root (or full `…/images/generations` URL) |
-| `GROK_BUILD_IMAGINE_MODEL` | `grok-imagine-image-quality` | Image model id |
-| `GROK_CLI_VERSION` | resolved from CLI / fallback | Client version header for proxy + Imagine |
+| `GROK_BUILD_IMAGINE_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Imagine proxy root or full `…/images/generations` URL |
+| `GROK_BUILD_IMAGINE_MODEL` | `grok-imagine-image-quality` | Image model ID |
+| `GROK_BUILD_VIDEO_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Video proxy root or full `…/videos/generations` URL |
+| `GROK_BUILD_VIDEO_MODEL` | `grok-imagine-video` | Video model ID |
+| `GROK_CLI_VERSION` | resolved from CLI / fallback | Client version header for proxy requests |
 
 ## Development
 
@@ -180,8 +201,9 @@ Layout:
 
 ```text
 src/
-  main.ts           # provider + command registration
+  main.ts           # provider, request hook, command, and tool registration
   auth.ts           # OAuth / credentials
+  headers.ts        # static proxy routing headers
   models.ts         # static model catalog
   payload.ts        # before_provider_request sanitizer
   usage.ts          # /grok-build-usage + shared token resolve
@@ -189,10 +211,17 @@ src/
     index.ts        # /grok-build-imagine
     tool.ts         # image_gen
     workflow.ts     # auth → generate → session save
-    generate.ts     # xAI images API
+    generate.ts     # entitlement-proxy image request
     save.ts         # session-local / tmp JPEG store
     parseArgs.ts    # CLI arg parser
     aspect.ts       # aspect ratio set
+  video/
+    index.ts        # /grok-build-imagine-video
+    tool.ts         # video_gen
+    workflow.ts     # submit → poll → download → save
+    generate.ts     # entitlement-proxy video submit and polling
+    save.ts         # session-local / tmp MP4 store
+    parseArgs.ts    # CLI arg parser
 ```
 
 See the repository root README for marketplace layout and dual-plugin install.

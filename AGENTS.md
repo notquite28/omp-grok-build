@@ -6,10 +6,10 @@
 
 | Plugin | Package | Purpose |
 |---|---|---|
-| `omp-grok-build` | `plugins/omp-grok-build/` | Grok Build CLI provider — chat/billing via the CLI entitlement proxy, usage bars, and Grok Imagine (`/grok-build-imagine`, `image_gen` tool). |
+| `omp-grok-build` | `plugins/omp-grok-build/` | Grok Build CLI provider — chat/billing via the CLI entitlement proxy, usage bars, and Grok Imagine image/video commands and tools. |
 | `omp-rewind` | `plugins/omp-rewind/` | Git checkpoint/rewind — `/rewind`, transactional tree/file restore, durable undo. |
 
-Catalog (`.claude-plugin/marketplace.json`, Claude Code marketplace schema): name `omp-ext`, `metadata.version` `0.2.2`. End users install:
+Catalog (`.claude-plugin/marketplace.json`, Claude Code marketplace schema): name `omp-ext`, `metadata.version` `0.3.0`. End users install:
 
 ```text
 omp install omp-grok-build@omp-ext
@@ -93,7 +93,7 @@ All git-touching hook bodies run through `runRepositoryOperation(state, op)` whi
 | `plugins/omp-grok-build/test/` | `provider`, `auth`, `payload`, `usage`, `imagine` tests (`bun:test`) |
 | `plugins/omp-rewind/` | Rewind plugin (own `package.json`; no `tsconfig`, no `bun.lock`) |
 | `plugins/omp-rewind/src/` | `core.ts`, `index.ts`, `commands.ts`, `state.ts`, `ui.ts` |
-| `plugins/omp-rewind/tests/` | `core.test.ts`, `commands.test.ts` (hand-rolled runner) |
+| `plugins/omp-rewind/tests/` | `core.test.ts`, `commands.test.ts`, `index.test.ts` (hand-rolled runner) |
 | `scripts/validate-marketplace.ts` | Catalog invariant validator |
 | `.github/workflows/` | `ci.yml` (4 jobs), `release.yml` (tag gate) |
 | `references/` | **Vendored upstream reference only** (`pi-rewind`, `oh-my-pi`) — NOT shipped, not in any `source`/`files[]` |
@@ -113,22 +113,29 @@ bun test                    # bun:test, auto-discovers test/**/*.test.ts
 
 # omp-rewind
 cd plugins/omp-rewind
-bun run test                # = bun tests/core.test.ts && bun tests/commands.test.ts
+bun run test                # = core.test.ts && commands.test.ts && index.test.ts
 # (no typecheck target — no tsconfig; relies on Bun runtime + host types)
 ```
 
 Root shortcuts: `bun run test:grok`, `bun run test:rewind`. **`typecheck` and `install:all` cover grok only.**
 
-Link into a live OMP profile:
+Link a checkout into an explicit live OMP profile:
 
 ```bash
-omp install ./plugins/omp-grok-build --force
-omp install ./plugins/omp-rewind --force
-# or marketplace flow:
-omp plugin marketplace add notquite28/omp-ext
-omp install omp-rewind@omp-ext
-omp plugin upgrade
+# Disable the marketplace copy first so only one plugin instance loads.
+omp --profile <profile> plugin disable omp-grok-build@omp-ext
+omp --profile <profile> plugin link --force ./plugins/omp-grok-build
+omp --profile <profile> plugin disable omp-rewind@omp-ext
+omp --profile <profile> plugin link --force ./plugins/omp-rewind
+
+# Restore a marketplace copy after local testing.
+omp --profile <profile> plugin uninstall omp-grok-build
+omp --profile <profile> plugin install --force omp-grok-build@omp-ext
+omp --profile <profile> plugin uninstall omp-rewind
+omp --profile <profile> plugin install --force omp-rewind@omp-ext
 ```
+
+Do not combine `--no-extensions` with `--extension` for local development on OMP 17.1.2: it suppresses the explicit extension too.
 
 ## Code Conventions & Common Patterns
 
@@ -179,7 +186,7 @@ omp plugin upgrade
 | Plugin | Framework | Runner | Files |
 |---|---|---|---|
 | `omp-grok-build` | `bun:test` (`describe`/`test`) | `bun test` (auto-discovery) | `test/*.test.ts` |
-| `omp-rewind` | **Hand-rolled** (own `assert`/`assertEqual`/`test` helpers, `process.exit` on failure) | explicit `bun tests/core.test.ts && bun tests/commands.test.ts` | `tests/*.test.ts` |
+| `omp-rewind` | **Hand-rolled** (own `assert`/`assertEqual`/`test` helpers, `process.exit` on failure) | explicit `bun tests/core.test.ts && bun tests/commands.test.ts && bun tests/index.test.ts` | `tests/*.test.ts` |
 
 Rewind uses `bun` only as the TS runtime, not as a test harness — there is no `bun:test` import in its tests.
 
@@ -190,7 +197,7 @@ Rewind uses `bun` only as the TS runtime, not as a test harness — there is no 
 - **Rewind git** — **real `git`** in disposable `mkdtemp(join(tmpdir(), "pi-rewind-test-"))` repos. Failure injected physically: `chmod 0o555` to break `git clean`; a `reference-transaction` hook script to break ref deletion. Cleanup via `rm -rf` in `finally`.
 - **Rewind host** — `FakeUI` class (queueable `select`/`confirm`/`notify`), in-memory `ReadonlySessionManager`, one-method `ExtensionAPI` capture.
 
-**`core.test.ts` runs in full isolation** — zero `@oh-my-pi/*` imports (mirrors `core.ts`). All host types appear only in `commands.test.ts` (the integration layer).
+**`core.test.ts` runs in full isolation** — zero `@oh-my-pi/*` imports (mirrors `core.ts`). Host types appear only in the command/lifecycle integration tests.
 
 **Contracts every suite defends:**
 

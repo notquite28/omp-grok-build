@@ -7,8 +7,8 @@
   "scripts": {
     "test": "bun run test:grok && bun run test:rewind",
     "test:grok": "bun --cwd plugins/omp-grok-build test",
-    "test:rewind": "bun --cwd plugins/omp-rewind run test",
-    "typecheck": "bun --cwd plugins/omp-grok-build run typecheck",
+    "test:rewind": "bun run --cwd plugins/omp-rewind test",
+    "typecheck": "bun run --cwd plugins/omp-grok-build typecheck",
     "validate": "bun scripts/validate-marketplace.ts",
     "install:all": "bun install --cwd plugins/omp-grok-build"
   }
